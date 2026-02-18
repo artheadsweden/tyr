@@ -1,0 +1,28 @@
+{
+  "artifact_schema_version": "verification.v2",
+  "folder": "pr-draft-20260218-124921",
+  "verified_head_sha": "22533aefa66c38dc8cae261556598b38d5e314e9",
+  "timestamp_utc": "2026-02-18T13:08:19Z",
+  "verification_status": "READY",
+  "zone_violations": [],
+  "red_operation_violations": [],
+  "acceptance_summary": [
+    {
+      "id": "AC-001",
+      "text": "development-plan.md exists and declares a single waypoint with explicit allowed/forbidden paths",
+      "status": "pass"
+    },
+    {
+      "id": "AC-002",
+      "text": "Coding stage created exactly one git commit touching only implementation-summary.md",
+      "status": "pass"
+    },
+    {
+      "id": "AC-003",
+      "text": "Verification wrote verification.md/verification.json/evidence-chain.json and bound metadata fields",
+      "status": "pass"
+    }
+  ],
+  "human_commits_after_coding": [],
+  "notes": "Verified HEAD commit scope matches plan+intent constraints; no zone or red-op violations detected."
+}
