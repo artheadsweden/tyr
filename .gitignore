@@ -1,0 +1,6 @@
+# Local-only Learner outputs (ID-SDLC v0.2)
+/.id-sdlc/intelligence/mission-outcomes.ndjson
+/.id-sdlc/intelligence/friction-zones.json
+
+# Local planning docs
+/planning/

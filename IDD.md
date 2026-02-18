@@ -62,6 +62,6 @@ It is not only about correctness; it is about alignment.
 
 When uncertainty exists, it must be resolved explicitly. Ambiguity is treated as a risk condition.
 
-### Why this folder exists
+### Why this repository exists
 
-`id-sdlc-imp/` is a reference implementation of IDD and ID-SDLC designed to make these principles operational with deterministic agent behavior and auditable artifacts.
+This repository is a reference implementation of IDD and ID-SDLC designed to make these principles operational with deterministic agent behavior and auditable artifacts.

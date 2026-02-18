@@ -8,6 +8,11 @@ Short descriptive title.
 
 Clear description of what is changing and why.
 
+## Strategy context (optional)
+
+- strategy_refs:
+- business_context:
+
 ## Goals
 
 Concrete objectives.
@@ -19,6 +24,14 @@ Explicitly state what this change will NOT do.
 ## Scope
 
 List of files and folders expected to change.
+
+## Plan artifact (produced by Planner stage)
+
+If present, the Planner stage will write:
+
+- `.id-sdlc/intent/<folder>/development-plan.md`
+
+Coding must treat it as binding constraints.
 
 ## Zone Impact
 

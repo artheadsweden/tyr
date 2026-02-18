@@ -78,6 +78,7 @@ __current-intent.json__
 The single routing pointer.
 Agents must resolve the active intent folder from this file.
 They must never scan for “latest” intent folders.
+See `.id-sdlc/current-intent-schema.md` for the required pointer format.
 
 __intent-template.md__
 Structural template for new intent packages.
@@ -128,7 +129,7 @@ They only propose improvements.
 
 ### 4. .github/agents/ — Custom Agents
 
-This repository defines four role-separated agents:
+This repository defines role-separated agents:
 
 ID-SDLC Intent
 
@@ -146,6 +147,14 @@ ID-SDLC Verification
 Verifies HEAD against intent.
 Binds commit metadata and produces structured verification artifacts.
 
+ID-SDLC Planner
+
+Produces a structured development plan (`development-plan.md`) and aligns `prompt.md` to it.
+
+ID-SDLC Learner
+
+Updates local-only collective intelligence outputs under `.id-sdlc/intelligence/`.
+
 ID-SDLC Governance Auditor
 
 Analyzes governance structure and enforcement logic.
@@ -158,9 +167,19 @@ Each agent has strict boundaries and explicit STOP conditions.
 
 ### Lifecycle Overview
 
-The framework defines a deterministic four-stage lifecycle:
+The framework defines a deterministic six-stage lifecycle (v0.2):
 
 1. Intent
+
+2. Plan
+
+3. Code
+
+4. Verify
+
+5. Learn
+
+6. Audit
 
 A structured intent package is created under .id-sdlc/intent/.
 

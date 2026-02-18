@@ -48,6 +48,7 @@ Before verifying, you must read:
 - `.id-sdlc/red_operations.yml`
 - `.id-sdlc/current-intent.json`
 - `.id-sdlc/intent/<active_folder>/intent.md`
+- `.id-sdlc/intent/<active_folder>/development-plan.md` (if present)
 - `.id-sdlc/intent/<active_folder>/prompt.md`
 - `.id-sdlc/intent/<active_folder>/metadata.json`
 
@@ -202,6 +203,7 @@ Unless STOP prevents verification, you must always write:
 
 - `.id-sdlc/intent/<active_folder>/verification.md`
 - `.id-sdlc/intent/<active_folder>/verification.json`
+- `.id-sdlc/intent/<active_folder>/evidence-chain.json`
 
 `verification.json` must always include these keys (use empty arrays when none):
 
@@ -213,6 +215,15 @@ Unless STOP prevents verification, you must always write:
 - `human_commits_after_coding`
 
 If verification can be performed and checks fail, you must still write both outputs and set `verification_status = NOT_READY`.
+
+`evidence-chain.json` (v0.2) must be an unsigned consolidation of intent, plan presence, execution binding, and verification results. It must include:
+
+- `evidence_chain_version`
+- `intent` (folder, optional strategy refs if present, optional intent_hash)
+- `plan` (plan_present, plan_version when present, waypoint_count when parseable)
+- `execution` (coding_commit_sha, zones_touched if deterministically known, red_ops_triggered)
+- `verification` (verified_head_sha, verification_status, zone_violations, red_operation_violations, acceptance_summary)
+- `timestamps_utc`
 
 ## 11. Final decision rule
 

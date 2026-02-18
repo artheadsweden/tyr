@@ -1,6 +1,6 @@
 # Classification guidelines (ID-SDLC-Imp v0.1)
 
-These guidelines help classify paths into zones in `id-sdlc-imp/.id-sdlc/zones.yml`.
+These guidelines help classify paths into zones in `.id-sdlc/zones.yml`.
 
 Principles:
 - Default to the stricter zone if unsure.

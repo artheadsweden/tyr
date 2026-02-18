@@ -1,8 +1,8 @@
-# metadata.json schema (ID-SDLC-Imp v0.1)
+# metadata.json schema (Tyr ID-SDLC v0.2)
 
 This document defines the metadata format stored alongside each intent package under:
 
-- `id-sdlc-imp/.id-sdlc/intent/<folder>/metadata.json`
+- `.id-sdlc/intent/<folder>/metadata.json`
 
 ## Required fields
 
@@ -18,10 +18,11 @@ This document defines the metadata format stored alongside each intent package u
 - `coding_commit_sha` (string|null): The coding agent commit SHA.
 - `human_commits_after_coding` (array of strings): Commit SHAs in chronological order.
 - `verified_head_sha` (string|null): SHA verified by verification.
-- `verification_status` (string): `not_started` | `ready` | `not_ready`.
+- `verification_status` (string): `READY` | `NOT_READY`.
 
 ## Optional fields
 
+- `verification_timestamp_utc` (string|null): ISO8601 UTC timestamp of the most recent verification run.
 - `runs` (array): Runtime traceability entries, for example toolchain/adaptor, model, initiator.
 - `notes` (string): Freeform notes.
 
@@ -38,7 +39,7 @@ A run entry may include:
 
 ```json
 {
-  "artifact_schema_version": "metadata.v1",
+  "artifact_schema_version": "metadata.v2",
   "pr": "TBD",
   "folder": "pr-draft-20260217-101006",
   "created_by": "intent.agent",
@@ -50,7 +51,8 @@ A run entry may include:
   "coding_commit_sha": null,
   "human_commits_after_coding": [],
   "verified_head_sha": null,
-  "verification_status": "not_started",
+  "verification_status": "NOT_READY",
+  "verification_timestamp_utc": null,
   "runs": [
     {
       "stage": "intent",

@@ -11,7 +11,7 @@ model:
 handoffs:
   - label: Verify implementation
     agent: ID-SDLC Verification
-    prompt: "Verify HEAD against the intent package referenced by .id-sdlc/current-intent.json (field: folder). Use .id-sdlc/intent/{{folder}} as the source of truth. Generate a diff for HEAD and assess intent compliance, zone compliance, and red-operations compliance. Write verification.md and verification.json into .id-sdlc/intent/{{folder}}. Update metadata.json with verified_head_sha, verification_status, coding_commit_sha if missing, and any detected human_commits_after_coding."
+    prompt: "Verify HEAD against the intent package referenced by .id-sdlc/current-intent.json (field: folder). Use .id-sdlc/intent/{{folder}} as the source of truth. Generate a diff for HEAD and assess intent compliance, zone compliance, and red-operations compliance. If development-plan.md exists, treat it as binding constraints and include it in verification. Write verification.md, verification.json, and evidence-chain.json into .id-sdlc/intent/{{folder}}. Update metadata.json with verified_head_sha, verification_status, and any detected human_commits_after_coding (and bind coding_commit_sha only if deterministically known per verification rules)."
     send: false
     model: "GPT-5.2 (copilot)"
 ---
@@ -38,6 +38,7 @@ Your job is to implement the change described by the **active intent package** a
 
 - Resolve the active intent folder via `.id-sdlc/current-intent.json` (field: `folder`). Never scan for the latest folder, never guess, never infer. If the file is missing, STOP and respect the <stop_protocol>. If the file is invalid, STOP and respect the <stop_protocol>. If the pointer is valid but points to a non-existent folder, STOP and respect the <stop_protocol>.
 - Treat `intent.md` as the contract.
+- If present, treat `development-plan.md` as binding execution constraints (waypoints, allowed/forbidden paths, expected zones, and verification hooks).
 - Treat `prompt.md` as the executable task definition.
 - A fresh chat context is recommended. If you suspect context contamination, follow the mandatory handling in section 5 before using edit tools.
 
@@ -62,6 +63,7 @@ Before making any changes, you must read all of the following paths:
 - `.id-sdlc/red_operations.yml`
 - `.id-sdlc/current-intent.json`
 - `.id-sdlc/intent/<active_folder>/intent.md`
+- `.id-sdlc/intent/<active_folder>/development-plan.md` (if present)
 - `.id-sdlc/intent/<active_folder>/prompt.md`
 - `.id-sdlc/intent/<active_folder>/metadata.json`
 

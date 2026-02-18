@@ -9,14 +9,14 @@ tools: ["read", "search", "execute", "vscode", "edit", "agent/runSubagent", "vsc
 model:
   - "GPT-5.2 (copilot)"
 handoffs:
-  - label: Plan the work (large changes)
-    agent: Plan
-    prompt: "Create a detailed implementation plan for the requested change. Do not modify code. Produce a plan that can be translated into an intent package (scope, acceptance criteria, test plan, risk notes). Then hand back to ID-SDLC Intent."
+  - label: Plan the work (Planner stage)
+    agent: ID-SDLC Planner
+    prompt: "Generate development-plan.md and align prompt.md for the active intent package referenced by .id-sdlc/current-intent.json. Do not modify application code or governance. Inject only evidence-backed intelligence warnings when present."
     send: false
     model: "GPT-5.2 (copilot)"
   - label: Start implementation
     agent: ID-SDLC Coding
-    prompt: "Implement strictly from the intent package referenced by .id-sdlc/current-intent.json (field: folder). Use .id-sdlc/intent/{{folder}} as source of truth. Treat intent.md as the contract and prompt.md as the executable task definition. Implement and create exactly one commit. Do not create a second commit for metadata updates. Verification will bind metadata fields (including coding_commit_sha) during verification."
+    prompt: "Implement strictly from the intent package referenced by .id-sdlc/current-intent.json (field: folder). Use .id-sdlc/intent/{{folder}} as source of truth. Treat intent.md as the contract, development-plan.md as binding constraints when present, and prompt.md as the executable task definition. Implement and create exactly one commit. Do not create a second commit for metadata updates. Verification will bind metadata fields (including coding_commit_sha) during verification."
     send: false
     model: "GPT-5.2 (copilot)"
 ---
@@ -178,14 +178,19 @@ The intent folder name must match:
 - Must NOT restate zone rules, red-ops rules, or orange constraints
 
 `metadata.json` required keys:
+- `artifact_schema_version` (string, `"metadata.v2"`)
 - `pr` (string, `"draft"` initially)
 - `folder` (string)
 - `created_by` (string, `"intent.agent"`)
 - `timestamp_utc` (ISO8601 string)
 - `risk_class` (string or `"unknown"`)
-- `expected_zones_touched` (array of strings, only values allowed is "red", "orange", "yellow", "green")
-- `expected_red_operations_involved` (boolean)
-- `mode_hint` (`"agent" | "human" | "mixed"`)
+- `zones_touched` (array of strings)
+- `red_operations_involved` (boolean)
+- `implementation_mode` (`"agent" | "human" | "mixed"`)
+- `coding_commit_sha` (string|null)
+- `human_commits_after_coding` (array of strings)
+- `verified_head_sha` (string|null)
+- `verification_status` (string, `"NOT_READY"` initially)
 
 `current-intent.json` required keys:
 - `folder`

@@ -36,7 +36,15 @@ Every change begins with an intent artifact describing:
 
 Intent is reviewable independently of code.
 
-2. **Controlled implementation**
+2. **Planning**
+
+A structured development plan is produced from intent:
+
+- decomposes work into waypoints
+- declares path and zone constraints
+- maps verification hooks to acceptance criteria
+
+3. **Controlled implementation**
 
 Implementation occurs strictly within the boundaries declared in intent.
 
@@ -44,7 +52,7 @@ Key rules:
 - uncertainty halts execution rather than silently proceeding
 - high-risk areas require stronger enforcement
 
-3. **Verification against intent**
+4. **Verification against intent**
 
 Verification measures the implementation against intent:
 - scope conformance
@@ -54,7 +62,11 @@ Verification measures the implementation against intent:
 
 Verification binds intent to a concrete git state.
 
-4. **Audit and refinement**
+5. **Learning loop**
+
+Outcomes are summarized into local collective intelligence artifacts to reduce future friction.
+
+6. **Audit and refinement**
 
 Over time, governance rules must evolve:
 - refine zone boundaries
@@ -65,16 +77,18 @@ Audit is a feedback loop that tightens the model.
 
 ### How Tyr implements this
 
-Tyr is the reference implementation inside `id-sdlc-imp/`.
+Tyr is the reference implementation in this repository.
 
 It provides:
-- deterministic routing via `id-sdlc-imp/.id-sdlc/current-intent.json`
-- explicit zones via `id-sdlc-imp/.id-sdlc/zones.yml`
-- explicit red operations via `id-sdlc-imp/.id-sdlc/red_operations.yml`
-- agent roles under `id-sdlc-imp/.github/agents/`
+- deterministic routing via `.id-sdlc/current-intent.json`
+- explicit zones via `.id-sdlc/zones.yml`
+- explicit red operations via `.id-sdlc/red_operations.yml`
+- agent roles under `.github/agents/`
 
 ### Deterministic routing rule
 
 Agents must never scan for the “latest” intent folder.
 
 They must read the routing pointer (`current-intent.json`) and stop if it is missing, invalid, or points to a non-existent folder.
+
+Pointer format is defined in `.id-sdlc/current-intent-schema.md`.

@@ -43,6 +43,7 @@ rules:
     - '^\.id-sdlc/intent/[^/]+/.*$'
     - '^\.id-sdlc/audit/.*$'
     - '^\.id-sdlc/current-intent\.json$'
+    - '^\.id-sdlc/intelligence/.*$'
 
   # Orange contract files are governance-critical and must never be modified by agents.
   # These denies are explicit (even though the allowlist already excludes them) to make
