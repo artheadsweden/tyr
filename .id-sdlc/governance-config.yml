@@ -1,0 +1,43 @@
+version: 1
+
+framework:
+  name: "id-sdlc-imp"
+  implementation: "tyr"
+  framework_version: "0.1"
+
+# Intent selection behavior
+intent:
+  selector: current-intent          # current-intent | latest | ask
+  current_pointer: id-sdlc-imp/.id-sdlc/current-intent.json
+  folder_name_pattern: "^pr-draft-[0-9]{8}-[0-9]{6}$"
+
+# Optional additional instruction files teams may maintain.
+# Agents may read these, but governance rules override them.
+instructions:
+  additional_files:
+    - id-sdlc-imp/.github/copilot-instructions.md
+  default_fallback: "none"
+
+# Toolchain/adaptor info for traceability. Agents should record what they know.
+toolchain:
+  adaptor: "vscode-custom-agent"
+  supported:
+    - "copilot_vscode"
+    - "claude_code_cli"
+    - "codex_cli"
+
+commit:
+  format_file: id-sdlc-imp/.id-sdlc/policies/commit-msg-format.md
+  allow_multiple_human_commits_after_coding: true
+
+zones:
+  treat_governance_as_orange: true
+  orange_write_scope:
+    - id-sdlc-imp/.id-sdlc/intent/
+    - id-sdlc-imp/.id-sdlc/audit/
+    - id-sdlc-imp/.id-sdlc/current-intent.json
+
+verification:
+  verify_target: HEAD
+  diff_base: parent
+  strict_on_ambiguity: true

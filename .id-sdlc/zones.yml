@@ -1,0 +1,60 @@
+version: 1
+last_reviewed: "2026-02-17"
+
+# Zone meanings are intentionally simple and operational.
+zones:
+  green:
+    description: "Low risk. Documentation and non-executable artifacts."
+  yellow:
+    description: "Medium risk. Implementation code and tests that can be reviewed quickly."
+  red:
+    description: "High risk. Security boundaries, identity, access control, deployment, and secrets."
+  yellow-auto:
+    description: "New folders waiting for explicit classification."
+  orange:
+    description: "Governance/runtime control surface. Agents may write only in allowlisted output paths."
+
+defaults:
+  inherit: true
+  new_folder_zone: "yellow-auto"
+
+# Folder classification for the project root itself.
+# The intent and audit runtime folders live under .id-sdlc to keep surface clean.
+folder_zones:
+  "": "yellow"
+  ".id-sdlc/": "orange"
+  ".id-sdlc/intent/": "orange"
+  ".id-sdlc/audit/": "orange"
+
+  "docs/": "green"
+
+# File-level overrides allow explicit downgrades/upgrades.
+file_overrides:
+  "README.md": "green"
+  "IDD.md": "green"
+  "ID-SDLC.md": "green"
+
+rules:
+  forbid_agent_changes_in_red: true
+  require_manual_plan_for_red: true
+
+  forbid_agent_changes_in_orange_except_allowlist: true
+  orange_write_allowlist:
+    - '^\.id-sdlc/intent/[^/]+/.*$'
+    - '^\.id-sdlc/audit/.*$'
+    - '^\.id-sdlc/current-intent\.json$'
+
+  # Orange contract files are governance-critical and must never be modified by agents.
+  # These denies are explicit (even though the allowlist already excludes them) to make
+  # the lockable boundary unambiguous.
+  orange_write_denylist:
+    - '^\.id-sdlc/zones\.yml$'
+    - '^\.id-sdlc/red_operations\.yml$'
+    - '^\.id-sdlc/governance-config\.yml$'
+    - '^\.id-sdlc/intent-template\.md$'
+    - '^\.id-sdlc/.*(schema|spec).*$'
+
+  intent_folder_name_patterns:
+    - "^pr-draft-[0-9]{8}-[0-9]{6}$"
+    - "^pr-[0-9]+$"
+    - "^pr-TBD$"
