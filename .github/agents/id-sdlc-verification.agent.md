@@ -120,6 +120,12 @@ If unauthorized orange modifications are detected in the verified diff, `verific
 
 You must verify the current repository state (`HEAD`).
 
+v0.5+ additional mandatory step:
+
+- Run the deterministic validator and capture its report:
+  - `python tools/tyr/tyr.py validate --stage verification`
+  - Read `.id-sdlc/intent/<active_folder>/validator-report.json` and include a summary in `verification.json` evidence.
+
 You must:
 
 1) Determine `HEAD` commit SHA.
@@ -213,6 +219,14 @@ Unless STOP prevents verification, you must always write:
 - `red_operation_violations`
 - `acceptance_summary`
 - `human_commits_after_coding`
+
+Additionally (v0.5+):
+
+- `verification.json` must include a `validator` evidence object containing at least:
+  - `exit_code`
+  - `ok`
+  - `error_count`
+  - `warning_count`
 
 If verification can be performed and checks fail, you must still write both outputs and set `verification_status = NOT_READY`.
 

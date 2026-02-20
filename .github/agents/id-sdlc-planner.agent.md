@@ -68,6 +68,7 @@ Write (or overwrite) these files inside the active intent folder:
   - expected_zones
   - red_ops_expected
   - verification hooks (tests/checks/acceptance mapping)
+- Avoid ambiguous patterns where a path is both allowed and forbidden (v0.5+ semantics are deny-wins: any forbidden match is a hard violation even if also allowed).
 - Inject memory warnings only when supported by concrete intelligence records.
 - If a waypoint would require red-zone edits or a red operation that cannot be performed automatically, the plan must mark the waypoint as HUMAN_REQUIRED and include a manual procedure section.
 

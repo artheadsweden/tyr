@@ -4,3 +4,7 @@
 
 # Local planning docs
 /planning/
+
+# Python
+__pycache__/
+*.pyc

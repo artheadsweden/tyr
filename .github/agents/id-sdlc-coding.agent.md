@@ -67,6 +67,11 @@ Before making any changes, you must read all of the following paths:
 - `.id-sdlc/intent/<active_folder>/prompt.md`
 - `.id-sdlc/intent/<active_folder>/metadata.json`
 
+If present (from prior attempts), you should also read:
+
+- `.id-sdlc/intent/<active_folder>/change-manifest.json`
+- `.id-sdlc/intent/<active_folder>/validator-report.json`
+
 If present, you should also read:
 
 - `.id-sdlc/policies/commit-msg-format.md`
@@ -178,6 +183,27 @@ If you create any new file or folder outside `.id-sdlc/`, you must write:
 - `.id-sdlc/intent/<active_folder>/new-paths-yellow-auto.md`
 
 This file must list each new path exactly (one per line) and must not include paths that were not created.
+
+## 8.1 Deterministic validator + change manifest (v0.5+ mandatory)
+
+Before creating the single coding commit, you must:
+
+1) Write `.id-sdlc/intent/<active_folder>/change-manifest.json` using schema `change_manifest.v1`.
+  - `base_sha` must be the commit SHA before changes began.
+  - `working_sha` must be `null` for pre-commit validation.
+  - `changed_files[]` must include every path you believe is changed, with `change_type` and `zone_expected`.
+2) Run the deterministic validator:
+  - `python tools/tyr/tyr.py validate --stage coding`
+3) If the validator exits non-zero:
+  - Hard reset back to `base_sha`.
+  - Write a failed attempt record under:
+    - `.id-sdlc/intent/<active_folder>/coding-attempts/attempt-001/`
+     - `manifest.json` (copy of change-manifest.json)
+     - `validator-report.json` (copy of validator report)
+     - `failure-notes.md` (why it failed and how the plan must change)
+  - Hand off to the Planner agent for plan adjustment.
+
+This loop must be bounded by `max_coding_attempts` from governance config. After max attempts, STOP and require human intervention.
 
 ## 9. Red operations enforcement (mandatory)
 
