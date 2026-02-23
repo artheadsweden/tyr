@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0",
+  "intent_id": "intent-RUNNER-GATE-SHAKEDOWN-001",
+  "status": "open",
+  "goal": "Shakedown: verify runner human approval gate blocks coding until GO.",
+  "scope": {
+    "allowed_paths": [
+      ".intent-ops/intents/packs/intent-RUNNER-GATE-SHAKEDOWN-001/**"
+    ],
+    "forbidden_paths": [
+      ".intent-ops/framework/**"
+    ]
+  },
+  "operations": {
+    "allowed": [
+      "create_files",
+      "create_folders",
+      "edit_files"
+    ],
+    "forbidden": [
+      "kernel_upgrades",
+      "dependency_changes",
+      "runtime_behavior_changes"
+    ]
+  },
+  "acceptance_criteria": [
+    "plan.md exists and includes the exact repo-tracked files to change/add and the exact validation commands",
+    "proof.md states coding occurs only after an explicit human GO",
+    "validate.py passes --stage coding, --stage verification, and --stage ci",
+    "intent is closed at the end of the shakedown"
+  ]
+}
