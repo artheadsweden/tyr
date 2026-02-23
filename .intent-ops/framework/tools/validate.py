@@ -210,8 +210,17 @@ def repo_root_from_git() -> Path:
     return root
 
 
-def list_changed_files(stage: str) -> List[ChangedFile]:
+def _git_ref_exists(ref: str) -> bool:
+    try:
+        run_git(["rev-parse", "--verify", ref])
+        return True
+    except Exception:
+        return False
+
+
+def list_changed_files(stage: str) -> Tuple[List[ChangedFile], Dict[str, Any]]:
     files: Dict[str, ChangedFile] = {}
+    meta: Dict[str, Any] = {}
 
     def add_from_name_status(output: str) -> None:
         for line in output.splitlines():
@@ -226,23 +235,58 @@ def list_changed_files(stage: str) -> List[ChangedFile]:
                 path = parts[1].strip()
                 files[path] = ChangedFile(path=path, status=status)
 
+    def add_untracked(output: str) -> None:
+        for line in output.splitlines():
+            p = line.strip()
+            if not p:
+                continue
+            files[p] = ChangedFile(path=p, status="U")
+
     debug(f"list_changed_files: stage={stage}")
     if stage == "verification":
         add_from_name_status(run_git(["diff", "--cached", "--name-status"]))
+        add_untracked(run_git(["ls-files", "--others", "--exclude-standard"]))
     elif stage == "coding":
         add_from_name_status(run_git(["diff", "--cached", "--name-status"]))
         add_from_name_status(run_git(["diff", "--name-status"]))
+        add_untracked(run_git(["ls-files", "--others", "--exclude-standard"]))
     elif stage == "ci":
-        try:
-            add_from_name_status(run_git(["diff", "--name-status", "origin/main...HEAD"]))
-        except Exception as e:
-            debug(f"ci diff origin/main failed, fallback: {e}")
-            add_from_name_status(run_git(["diff", "--name-status", "HEAD~1...HEAD"]))
+        base_candidates = ["origin/main", "origin/master", "main", "master"]
+        base_ref: Optional[str] = None
+        for cand in base_candidates:
+            if _git_ref_exists(cand):
+                base_ref = cand
+                break
+
+        meta["ci_base_ref"] = base_ref
+        meta["ci_merge_base"] = None
+        meta["ci_fallback_mode"] = None
+
+        if base_ref is not None:
+            try:
+                merge_base = run_git(["merge-base", base_ref, "HEAD"]).strip()
+                meta["ci_merge_base"] = merge_base
+                add_from_name_status(run_git(["diff", "--name-status", f"{merge_base}..HEAD"]))
+            except Exception as e:
+                debug(f"ci merge-base or diff failed, fallback: {e}")
+                base_ref = None
+                meta["ci_base_ref"] = None
+                meta["ci_merge_base"] = None
+
+        if base_ref is None:
+            # Fallback: HEAD~1..HEAD (if possible), else diff root
+            try:
+                run_git(["rev-parse", "--verify", "HEAD~1"])
+                meta["ci_fallback_mode"] = "head~1"
+                add_from_name_status(run_git(["diff", "--name-status", "HEAD~1..HEAD"]))
+            except Exception:
+                meta["ci_fallback_mode"] = "root"
+                add_from_name_status(run_git(["diff", "--name-status", "--root", "HEAD"]))
     else:
         raise ValueError(f"Unknown stage: {stage}")
 
     debug(f"list_changed_files: count={len(files)}")
-    return sorted(files.values(), key=lambda x: x.path)
+    return sorted(files.values(), key=lambda x: x.path), meta
 
 
 # ----------------------------
@@ -296,6 +340,9 @@ def make_summary(stage: str) -> Dict[str, Any]:
         "active_pack_path": None,
         "changed_files": [],
         "ignored_changed_files": [],
+        "ci_base_ref": None,
+        "ci_merge_base": None,
+        "ci_fallback_mode": None,
         "findings": [],
         "debug": {},
     }
@@ -507,12 +554,17 @@ def validate(stage: str) -> Tuple[bool, List[Finding], Dict[str, Any], Optional[
 
     # Git changes
     try:
-        changed = list_changed_files(stage)
+        changed, ci_meta = list_changed_files(stage)
     except Exception as e:
         debug(f"git diff exception: {e!r}")
         add_fail(summary, findings, "GIT_DIFF_FAILED", f"Failed to list changed files: {e}")
         summary["findings"] = [{"level": f.level, "code": f.code, "message": f.message, "path": f.path} for f in findings]
         return False, findings, summary, active_pack, repo_root
+
+    if stage == "ci":
+        summary["ci_base_ref"] = ci_meta.get("ci_base_ref")
+        summary["ci_merge_base"] = ci_meta.get("ci_merge_base")
+        summary["ci_fallback_mode"] = ci_meta.get("ci_fallback_mode")
 
     ignored: List[ChangedFile] = []
     effective_changed: List[ChangedFile] = []
@@ -526,6 +578,57 @@ def validate(stage: str) -> Tuple[bool, List[Finding], Dict[str, Any], Optional[
     changed = sorted(effective_changed, key=lambda x: x.path)
     summary["changed_files"] = [{"path": c.path, "status": c.status} for c in changed]
     summary["ignored_changed_files"] = [{"path": c.path, "status": c.status} for c in ignored]
+
+    # Dirty worktree gates
+    if stage == "verification":
+        try:
+            unstaged = [normalize_repo_rel_path(x) for x in run_git(["diff", "--name-only"]).splitlines() if x.strip()]
+            unstaged = [p for p in unstaged if not is_ignored_generated(p)]
+        except Exception as e:
+            unstaged = []
+            debug(f"verification dirty gate failed to evaluate: {e!r}")
+
+        if unstaged:
+            add_fail(
+                summary,
+                findings,
+                "VERIFICATION_DIRTY_WORKTREE",
+                "verification stage requires a clean working tree (no unstaged tracked changes).",
+                unstaged[0],
+            )
+
+    if stage == "ci":
+        try:
+            ci_unstaged = [normalize_repo_rel_path(x) for x in run_git(["diff", "--name-only"]).splitlines() if x.strip()]
+            ci_unstaged = [p for p in ci_unstaged if not is_ignored_generated(p)]
+        except Exception as e:
+            ci_unstaged = []
+            debug(f"ci dirty gate (unstaged) failed to evaluate: {e!r}")
+
+        try:
+            ci_untracked = [normalize_repo_rel_path(x) for x in run_git(["ls-files", "--others", "--exclude-standard"]).splitlines() if x.strip()]
+            ci_untracked = [p for p in ci_untracked if not is_ignored_generated(p)]
+        except Exception as e:
+            ci_untracked = []
+            debug(f"ci dirty gate (untracked) failed to evaluate: {e!r}")
+
+        if ci_unstaged:
+            add_fail(
+                summary,
+                findings,
+                "CI_DIRTY_WORKTREE",
+                "ci stage requires a clean working tree (no unstaged tracked changes).",
+                ci_unstaged[0],
+            )
+
+        if ci_untracked:
+            add_fail(
+                summary,
+                findings,
+                "CI_UNTRACKED_PRESENT",
+                "ci stage requires no untracked files (excluding ignored generated outputs).",
+                ci_untracked[0],
+            )
 
     # Zones
     zones_obj = zones.get("zones", {}) if isinstance(zones.get("zones", {}), dict) else {}
