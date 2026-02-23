@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "intentops://schemas/intent.schema.json",
+  "title": "IntentOps Intent Pack Schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "intent_id", "goal", "scope", "operations", "acceptance_criteria"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Schema version for the intent pack payload."
+    },
+    "intent_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^intent-[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "description": "Stable identifier for the intent pack (should match the pack folder name)."
+    },
+    "goal": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable description of what this change aims to achieve."
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowed_paths"],
+      "properties": {
+        "allowed_paths": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Glob patterns of paths that are permitted to be modified for this intent."
+        },
+        "forbidden_paths": {
+          "type": "array",
+          "minItems": 0,
+          "items": { "type": "string", "minLength": 1 },
+          "default": [],
+          "description": "Glob patterns of paths that are explicitly forbidden (deny-wins)."
+        },
+        "notes": {
+          "type": "string",
+          "default": "",
+          "description": "Optional free-form notes clarifying scope."
+        }
+      }
+    },
+    "operations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowed", "forbidden"],
+      "properties": {
+        "allowed": {
+          "type": "array",
+          "minItems": 0,
+          "items": { "$ref": "#/$defs/operation" },
+          "default": [],
+          "description": "Operation categories explicitly allowed for this intent."
+        },
+        "forbidden": {
+          "type": "array",
+          "minItems": 0,
+          "items": { "$ref": "#/$defs/operation" },
+          "default": [],
+          "description": "Operation categories explicitly forbidden for this intent (deny-wins)."
+        }
+      }
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Checklist of conditions that must be true for the change to be accepted."
+    }
+  },
+  "$defs": {
+    "operation": {
+      "type": "string",
+      "enum": [
+        "create_files",
+        "create_folders",
+        "edit_files",
+        "delete_files",
+        "rename_files",
+        "move_files",
+        "refactor",
+        "formatting_only_changes",
+        "dependency_changes",
+        "runtime_behavior_changes",
+        "security_sensitive_change",
+        "data_model_change",
+        "api_contract_change",
+        "build_pipeline_change",
+        "config_change",
+        "test_change",
+        "documentation_change"
+      ],
+      "description": "High-level operation category used for governance and escalation."
+    }
+  }
+}

@@ -1,0 +1,51 @@
+# IntentOps Framework Configuration
+# This file defines the active governance level and enforcement rules.
+# All agents must treat this file as read-only (Purple zone).
+
+framework:
+  name: "IntentOps"
+  version: "0.1.0"
+
+governance:
+  level: "var"   # allowed: var | syn | tyr
+
+  # Controls how strictly rules are enforced
+  enforcement:
+    purple_zone: "fail"     # fail | warn
+    orange_zone: "fail"     # fail | warn
+    pink_zone: "fail"       # fail | warn
+    red_zone: "fail"        # fail | warn
+    yellow_zone: "warn"     # fail | warn
+
+  # Whether zone classification is required (Syn+)
+  require_zones: false      # true automatically when level >= syn
+
+  # Whether structured planning is required (Tyr only)
+  require_planning: false   # true automatically when level == tyr
+
+  # Whether learning stage is required (Tyr only)
+  enable_learning: false    # true automatically when level == tyr
+
+paths:
+  framework_root: ".intent-ops/framework"
+  intents_root: ".intent-ops/intents"
+  packs_root: ".intent-ops/intents/packs"
+  current_intent_file: ".intent-ops/intents/current-intent.json"
+
+agents:
+  runner: "intentops.runner"
+  intent: "intentops.intent"
+  planner: "intentops.planner"
+  coding: "intentops.coding"
+  verification: "intentops.verification"
+  learner: "intentops.learner"
+  auditor: "intentops.governance-auditor"
+
+security:
+  # Optional future: validate framework file integrity
+  enforce_checksums: false
+  checksum_file: ".intent-ops/framework/checksums.txt"
+
+logging:
+  write_runner_log: true
+  runner_log_file: "run.json"

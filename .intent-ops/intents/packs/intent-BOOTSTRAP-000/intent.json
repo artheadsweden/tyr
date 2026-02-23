@@ -1,0 +1,35 @@
+{
+  "schema_version": "1.0",
+  "intent_id": "intent-BOOTSTRAP-000",
+  "goal": "Establish the IntentOps folder structure, base configuration files, and Copilot agent entrypoint without modifying host project source code.",
+  "scope": {
+    "allowed_paths": [
+      ".intent-ops/**",
+      ".github/agents/intentops.*.agent.md"
+    ],
+    "forbidden_paths": [
+      "**"
+    ],
+    "notes": "No host project code changes are allowed in bootstrap."
+  },
+  "operations": {
+    "allowed": [
+      "create_files",
+      "create_folders",
+      "edit_files"
+    ],
+    "forbidden": [
+      "refactor",
+      "formatting_only_changes",
+      "dependency_changes",
+      "runtime_behavior_changes"
+    ]
+  },
+  "acceptance_criteria": [
+    "framework.yml exists and parses",
+    "zones.yml exists and parses",
+    "current-intent.json points to this pack",
+    "Runner agent exists in .github/agents/",
+    "No files outside .intent-ops/ and .github/agents/ are modified"
+  ]
+}

@@ -1,0 +1,17 @@
+zones:
+  purple:
+    paths:
+      - ".intent-ops/framework/**"
+  orange:
+    paths:
+      - ".intent-ops/intents/**"
+  red:
+    paths: []
+  yellow:
+    paths: []
+  green:
+    paths:
+      - "**"
+    exclude:
+      - ".intent-ops/**"   # handled explicitly above
+      - ".github/agents/**" # optionally treat as yellow/red; your choice
