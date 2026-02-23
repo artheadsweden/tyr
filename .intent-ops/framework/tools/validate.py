@@ -425,6 +425,18 @@ def load_intent_json(active_pack: Path) -> Dict[str, Any]:
     return data
 
 
+def load_json_from_git_show(repo_rel_path: str, ref: str = "HEAD") -> Optional[Dict[str, Any]]:
+    p = normalize_repo_rel_path(repo_rel_path)
+    try:
+        raw = run_git(["show", f"{ref}:{p}"])
+    except Exception:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
 def effective_level(framework: Dict[str, Any]) -> str:
     lvl = framework.get("governance", {}).get("level", "var")
     lvl = str(lvl).strip().lower()
@@ -644,6 +656,9 @@ def validate(stage: str) -> Tuple[bool, List[Finding], Dict[str, Any], Optional[
     active_pack_rel_from_intents = os.path.relpath(active_pack.resolve(), intents_root).replace("\\", "/")
     active_pack_prefix = (active_pack_rel_from_intents.rstrip("/") + "/") if active_pack_rel_from_intents != "." else ""
 
+    active_pack_repo_rel = normalize_repo_rel_path(os.path.relpath(active_pack.resolve(), repo_root_resolved))
+    active_pack_repo_prefix = (active_pack_repo_rel.rstrip("/") + "/") if active_pack_repo_rel != "." else ""
+
     add_debug(summary, "intents_root", str(intents_root))
     add_debug(summary, "active_pack_rel_from_intents", active_pack_rel_from_intents)
 
@@ -665,6 +680,143 @@ def validate(stage: str) -> Tuple[bool, List[Finding], Dict[str, Any], Optional[
     allow_purple_paths = [str(x) for x in allow_purple_paths if isinstance(x, str) and str(x).strip()]
 
     current_intent_rel_norm = normalize_repo_rel_path(current_intent_file_rel)
+
+    # ----------------------------
+    # Patch 04: Intent lifecycle transactions
+    # ----------------------------
+
+    def is_under_repo_prefix(repo_rel_path: str, prefix: str) -> bool:
+        pr = normalize_repo_rel_path(repo_rel_path)
+        pre = normalize_repo_rel_path(prefix).rstrip("/")
+        if not pre:
+            return True
+        return pr == pre or pr.startswith(pre + "/")
+
+    current_intent_changed = any(c.path == current_intent_rel_norm for c in changed)
+
+    # Closing transition detection for the *current* active pack
+    active_intent_json_rel = normalize_repo_rel_path(f"{active_pack_repo_rel.rstrip('/')}/intent.json")
+    head_intent = load_json_from_git_show(active_intent_json_rel, ref="HEAD")
+    if head_intent is None:
+        add_debug(summary, "head_intent_status_missing_assumed_open", True)
+        head_status = "open"
+    else:
+        head_status = str(head_intent.get("status", "open")).strip().lower()
+
+    working_status = str(intent.get("status", "")).strip().lower()
+
+    if head_status == "closed" and working_status == "open":
+        add_fail(
+            summary,
+            findings,
+            "CLOSED_TO_OPEN_FORBIDDEN",
+            "Closed intents may not be reopened (closed -> open is forbidden).",
+            active_intent_json_rel,
+        )
+
+    close_transition = head_status == "open" and working_status == "closed"
+
+    # Closed means immutable (based on HEAD)
+    if head_status == "closed":
+        for c in changed:
+            if is_under_repo_prefix(c.path, active_pack_repo_prefix):
+                add_fail(
+                    summary,
+                    findings,
+                    "CLOSED_INTENT_IMMUTABLE",
+                    "Active intent is closed in HEAD; files under the pack are immutable.",
+                    c.path,
+                )
+
+    # Switch transaction detection (current-intent.json modified)
+    if current_intent_changed:
+        if stage == "coding":
+            add_fail(
+                summary,
+                findings,
+                "CURRENT_INTENT_CHANGED_IN_CODING",
+                "current-intent.json may not be changed in coding stage.",
+                current_intent_rel_norm,
+            )
+        # Strict switch transaction allowed change set
+        for c in changed:
+            if c.path == current_intent_rel_norm:
+                continue
+            if is_under_repo_prefix(c.path, active_pack_repo_prefix):
+                continue
+            add_fail(
+                summary,
+                findings,
+                "SWITCH_TRANSACTION_MIXED_CHANGES",
+                "When current-intent.json changes, only the new active pack and current-intent.json may change.",
+                c.path,
+            )
+
+        # Target pack must be open
+        if working_status == "closed":
+            add_fail(
+                summary,
+                findings,
+                "CLOSED_INTENT_NOT_ACTIVATABLE",
+                "Cannot switch to an intent pack whose status is 'closed'.",
+                active_intent_json_rel,
+            )
+
+        # Switch and close cannot be combined
+        head_current_intent = load_json_from_git_show(current_intent_rel_norm, ref="HEAD")
+        if isinstance(head_current_intent, dict):
+            prev_pack_rel = head_current_intent.get("active_pack_path")
+            if isinstance(prev_pack_rel, str) and prev_pack_rel.strip():
+                prev_pack_abs = (intents_root / normalize_repo_rel_path(prev_pack_rel)).resolve()
+                prev_pack_repo_rel = normalize_repo_rel_path(os.path.relpath(prev_pack_abs, repo_root_resolved))
+                prev_intent_json_rel = normalize_repo_rel_path(f"{prev_pack_repo_rel.rstrip('/')}/intent.json")
+                if any(c.path == prev_intent_json_rel for c in changed):
+                    prev_head_intent = load_json_from_git_show(prev_intent_json_rel, ref="HEAD")
+                    prev_working_intent: Optional[Dict[str, Any]] = None
+                    try:
+                        prev_working_intent = json.loads((repo_root_resolved / prev_intent_json_rel).read_text(encoding="utf-8"))
+                    except Exception:
+                        prev_working_intent = None
+                    prev_head_status = str((prev_head_intent or {}).get("status", "open")).strip().lower()
+                    prev_working_status = str((prev_working_intent or {}).get("status", "open")).strip().lower()
+                    if prev_head_status == "open" and prev_working_status == "closed":
+                        add_fail(
+                            summary,
+                            findings,
+                            "SWITCH_AND_CLOSE_COMBINED",
+                            "Switching active intent and closing the previous intent cannot be combined in one run.",
+                            prev_intent_json_rel,
+                        )
+
+    # Close transaction strictness
+    if close_transition:
+        if current_intent_changed:
+            add_fail(
+                summary,
+                findings,
+                "SWITCH_AND_CLOSE_COMBINED",
+                "Switching active intent and closing an intent cannot be combined in one run.",
+                active_intent_json_rel,
+            )
+
+        if stage not in ("verification", "ci"):
+            add_fail(
+                summary,
+                findings,
+                "CLOSE_FORBIDDEN_STAGE",
+                "Closing an intent (open -> closed) is only permitted in verification or ci stage.",
+                active_intent_json_rel,
+            )
+
+        for c in changed:
+            if c.path != active_intent_json_rel:
+                add_fail(
+                    summary,
+                    findings,
+                    "CLOSE_TRANSACTION_MIXED_CHANGES",
+                    "When closing an intent, only the intent.json status flip is permitted (plus ignored generated outputs).",
+                    c.path,
+                )
 
     # Apply rules
     for c in changed:
