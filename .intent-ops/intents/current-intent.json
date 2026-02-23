@@ -1,8 +1,8 @@
 {
   "schema_version": "1.0",
-  "active_intent_id": "intent-MIGRATE-CLEANUP-001",
-  "active_pack_path": "packs/intent-MIGRATE-CLEANUP-001",
+  "active_intent_id": "intent-VAR-NEXT-001",
+  "active_pack_path": "packs/intent-VAR-NEXT-001",
   "locked": false,
   "updated_at": "2026-02-23T13:30:00Z",
-  "notes": "Migration: remove legacy ID-SDLC artifacts."
+  "notes": "Normal work: VAR intent pack."
 }
