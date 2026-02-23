@@ -396,6 +396,44 @@ def is_symlink_in_ref(ref: str, repo_rel_path: str) -> bool:
     return mode.startswith("120000")
 
 
+def git_blob_exists(ref: str, repo_rel_path: str) -> bool:
+    p = normalize_repo_rel_path(repo_rel_path)
+    try:
+        run_git(["cat-file", "-e", f"{ref}:{p}"])
+        return True
+    except Exception:
+        return False
+
+
+def current_intent_pointers(ci: Optional[Dict[str, Any]]) -> Optional[Tuple[str, str]]:
+    if not isinstance(ci, dict):
+        return None
+    intent_id = str(ci.get("active_intent_id") or "").strip()
+    pack_path = str(ci.get("active_pack_path") or "").strip()
+    if not intent_id or not pack_path:
+        return None
+    return intent_id, pack_path
+
+
+def normalize_intent_status(status_value: Any) -> Tuple[Optional[str], Optional[str]]:
+    legacy = {"var", "syn", "tyr", "active"}
+
+    if status_value is None:
+        return "open", "INTENT_STATUS_DEFAULTED"
+
+    s = str(status_value).strip().lower()
+    if not s:
+        return "open", "INTENT_STATUS_DEFAULTED"
+
+    if s in ("open", "closed"):
+        return s, None
+
+    if s in legacy:
+        return "open", "INTENT_STATUS_LEGACY_MAPPED"
+
+    return None, None
+
+
 def list_changed_files(stage: str) -> Tuple[List[ChangedFile], Dict[str, Any]]:
     files: Dict[str, ChangedFile] = {}
     meta: Dict[str, Any] = {}
@@ -652,6 +690,7 @@ def validate_commit_snapshot(commit: str, parent: Optional[str], changed: List[C
         "parent": parent,
         "pass": True,
         "skipped": False,
+        "bootstrap_initialisation": False,
         "active_intent_id": None,
         "active_pack_path": None,
         "changed_files": [],
@@ -662,6 +701,9 @@ def validate_commit_snapshot(commit: str, parent: Optional[str], changed: List[C
     def add_commit_fail(code: str, message: str, path: Optional[str] = None) -> None:
         result["pass"] = False
         result["findings"].append({"level": "fail", "code": code, "message": message, "path": path})
+
+    def add_commit_warn(code: str, message: str, path: Optional[str] = None) -> None:
+        result["findings"].append({"level": "warn", "code": code, "message": message, "path": path})
 
     ignored: List[ChangedFile] = []
     eff: List[ChangedFile] = []
@@ -723,9 +765,17 @@ def validate_commit_snapshot(commit: str, parent: Optional[str], changed: List[C
         result["findings"] = _findings_sorted(result["findings"])
         return result
 
-    cur_status = str(intent_at.get("status", "")).strip().lower()
-    if cur_status not in ("open", "closed"):
+    cur_status_norm, status_warn = normalize_intent_status(intent_at.get("status"))
+    if status_warn == "INTENT_STATUS_DEFAULTED":
+        add_commit_warn("INTENT_STATUS_DEFAULTED", "intent.status missing/empty; defaulting to 'open'.", active_intent_json_rel)
+    if status_warn == "INTENT_STATUS_LEGACY_MAPPED":
+        add_commit_warn("INTENT_STATUS_LEGACY_MAPPED", "intent.status legacy value mapped to 'open'.", active_intent_json_rel)
+
+    if cur_status_norm is None:
         add_commit_fail("INTENT_STATUS_INVALID", "intent.status must be either 'open' or 'closed'.", active_intent_json_rel)
+        cur_status = "open"
+    else:
+        cur_status = cur_status_norm
 
     kernel_upgrade = intent_at.get("kernel_upgrade", {}) if isinstance(intent_at.get("kernel_upgrade", {}), dict) else {}
     allow_purple_paths = kernel_upgrade.get("allow_purple_paths", [])
@@ -764,17 +814,50 @@ def validate_commit_snapshot(commit: str, parent: Optional[str], changed: List[C
     orange_effective = [normalize_repo_rel_path(x) for x in orange_paths if isinstance(x, str) and str(x).strip()]
     current_intent_rel_norm = normalize_repo_rel_path(current_intent_file_rel)
 
+    # Bootstrap initialisation (commit replay only)
+    parent_has_framework = git_blob_exists(parent, ".intent-ops/framework/config/framework.yml") if parent else False
+    parent_has_current_intent = git_blob_exists(parent, current_intent_rel_norm) if parent else False
+    bootstrap_initialisation = (not parent_has_framework) or (not parent_has_current_intent)
+    result["bootstrap_initialisation"] = bool(bootstrap_initialisation)
+
+    if bootstrap_initialisation:
+        governed_allow = [".intent-ops/**", ".github/agents/intentops.*.agent.md"]
+        for c in eff:
+            if matches_any_glob(c.path, governed_allow):
+                continue
+            add_commit_fail(
+                "BOOTSTRAP_OUTSIDE_GOVERNED_ROOTS",
+                "Bootstrap initialisation commit may only change governed roots (.intent-ops/** and .github/agents/intentops.*.agent.md).",
+                c.path,
+            )
+
+        # Still enforce symlink ban for governed roots (tree-based)
+        for c in eff:
+            p = c.path
+            if str(c.status).startswith("D"):
+                continue
+            if p.startswith(".intent-ops/") or p.startswith(".github/agents/"):
+                if is_symlink_in_ref(commit, p):
+                    add_commit_fail("SYMLINK_FORBIDDEN", "Symlinks are forbidden under governed roots.", p)
+
+        result["findings"] = _findings_sorted(result["findings"])
+        return result
+
     # Transition state using parent snapshot
     prev_status = "open"
     if parent:
         prev_intent = load_json_from_git_show(active_intent_json_rel, ref=parent)
         if isinstance(prev_intent, dict):
-            prev_status = str(prev_intent.get("status", "open")).strip().lower()
+            prev_status_norm, _ = normalize_intent_status(prev_intent.get("status"))
+            prev_status = prev_status_norm or "open"
 
     close_transition = prev_status == "open" and cur_status == "closed"
     closed_to_open = prev_status == "closed" and cur_status == "open"
 
-    current_intent_changed = any(c.path == current_intent_rel_norm for c in eff)
+    parent_current_intent = load_json_from_git_show(current_intent_rel_norm, ref=parent) if parent else None
+    old_ptrs = current_intent_pointers(parent_current_intent)
+    new_ptrs = current_intent_pointers(current_intent_at)
+    switch_detected = (old_ptrs is not None and new_ptrs is not None and old_ptrs != new_ptrs)
 
     if closed_to_open:
         add_commit_fail("CLOSED_TO_OPEN_FORBIDDEN", "Closed intents may not be reopened (closed -> open is forbidden).", active_intent_json_rel)
@@ -786,7 +869,7 @@ def validate_commit_snapshot(commit: str, parent: Optional[str], changed: List[C
                 add_commit_fail("CLOSED_INTENT_IMMUTABLE", "Closed intent is immutable; pack files cannot be modified.", c.path)
 
     # Switch transaction strictness
-    if current_intent_changed:
+    if switch_detected:
         for c in eff:
             if c.path == current_intent_rel_norm:
                 continue
@@ -802,10 +885,6 @@ def validate_commit_snapshot(commit: str, parent: Optional[str], changed: List[C
             add_commit_fail("CLOSED_INTENT_NOT_ACTIVATABLE", "Cannot switch to a closed intent pack.", active_intent_json_rel)
 
         if parent:
-            parent_framework = load_yaml_subset_from_git_show(".intent-ops/framework/config/framework.yml", ref=parent)
-            parent_paths = derive_framework_paths(parent_framework) if isinstance(parent_framework, dict) else None
-            parent_ci_path = parent_paths["current_intent_file"] if parent_paths else current_intent_file_rel
-            parent_current_intent = load_json_from_git_show(parent_ci_path, ref=parent)
             if isinstance(parent_current_intent, dict):
                 prev_pack_rel = parent_current_intent.get("active_pack_path")
                 if isinstance(prev_pack_rel, str) and prev_pack_rel.strip():
@@ -813,8 +892,10 @@ def validate_commit_snapshot(commit: str, parent: Optional[str], changed: List[C
                     prev_intent_json = normalize_repo_rel_path(prev_pack_prefix + "intent.json")
                     prev_intent_parent = load_json_from_git_show(prev_intent_json, ref=parent)
                     prev_intent_cur = load_json_from_git_show(prev_intent_json, ref=commit)
-                    prev_parent_status = str((prev_intent_parent or {}).get("status", "open")).strip().lower()
-                    prev_cur_status = str((prev_intent_cur or {}).get("status", "open")).strip().lower()
+                    prev_parent_status_norm, _ = normalize_intent_status((prev_intent_parent or {}).get("status"))
+                    prev_cur_status_norm, _ = normalize_intent_status((prev_intent_cur or {}).get("status"))
+                    prev_parent_status = prev_parent_status_norm or "open"
+                    prev_cur_status = prev_cur_status_norm or "open"
                     if prev_parent_status == "open" and prev_cur_status == "closed":
                         add_commit_fail(
                             "SWITCH_AND_CLOSE_COMBINED",
@@ -824,7 +905,7 @@ def validate_commit_snapshot(commit: str, parent: Optional[str], changed: List[C
 
     # Close transaction strictness
     if close_transition:
-        if current_intent_changed:
+        if switch_detected:
             add_commit_fail(
                 "SWITCH_AND_CLOSE_COMBINED",
                 "Switching active intent and closing an intent cannot be combined in one commit.",
@@ -1161,9 +1242,17 @@ def validate(stage: str) -> Tuple[bool, List[Finding], Dict[str, Any], Optional[
         if req_key not in intent:
             add_fail(summary, findings, "INTENT_SCHEMA_MINIMAL", f"intent.json missing required key: {req_key}")
 
-    status = str(intent.get("status", "")).strip().lower()
-    if status not in ("open", "closed"):
+    status_norm, status_warn = normalize_intent_status(intent.get("status"))
+    if status_warn == "INTENT_STATUS_DEFAULTED":
+        add_warn(summary, findings, "INTENT_STATUS_DEFAULTED", "intent.status missing/empty; defaulting to 'open'.")
+    if status_warn == "INTENT_STATUS_LEGACY_MAPPED":
+        add_warn(summary, findings, "INTENT_STATUS_LEGACY_MAPPED", "intent.status legacy value mapped to 'open'.")
+
+    if status_norm is None:
         add_fail(summary, findings, "INTENT_STATUS_INVALID", "intent.status must be either 'open' or 'closed'.")
+        status = "open"
+    else:
+        status = status_norm
 
     if current_intent.get("active_intent_id") != intent.get("intent_id"):
         add_fail(
@@ -1319,7 +1408,11 @@ def validate(stage: str) -> Tuple[bool, List[Finding], Dict[str, Any], Optional[
             return True
         return pr == pre or pr.startswith(pre + "/")
 
-    current_intent_changed = any(c.path == current_intent_rel_norm for c in changed)
+    current_intent_file_touched = any(c.path == current_intent_rel_norm for c in changed)
+    head_current_intent = load_json_from_git_show(current_intent_rel_norm, ref="HEAD")
+    old_ptrs = current_intent_pointers(head_current_intent)
+    new_ptrs = current_intent_pointers(current_intent)
+    switch_detected = (old_ptrs is not None and new_ptrs is not None and old_ptrs != new_ptrs)
 
     # Closing transition detection for the *current* active pack
     active_intent_json_rel = normalize_repo_rel_path(f"{active_pack_repo_rel.rstrip('/')}/intent.json")
@@ -1328,9 +1421,10 @@ def validate(stage: str) -> Tuple[bool, List[Finding], Dict[str, Any], Optional[
         add_debug(summary, "head_intent_status_missing_assumed_open", True)
         head_status = "open"
     else:
-        head_status = str(head_intent.get("status", "open")).strip().lower()
+        head_status_norm, _ = normalize_intent_status(head_intent.get("status"))
+        head_status = head_status_norm or "open"
 
-    working_status = str(intent.get("status", "")).strip().lower()
+    working_status = status
 
     if head_status == "closed" and working_status == "open":
         add_fail(
@@ -1356,7 +1450,16 @@ def validate(stage: str) -> Tuple[bool, List[Finding], Dict[str, Any], Optional[
                 )
 
     # Switch transaction detection (current-intent.json modified)
-    if current_intent_changed:
+    if current_intent_file_touched and stage == "coding":
+        add_fail(
+            summary,
+            findings,
+            "CURRENT_INTENT_CHANGED_IN_CODING",
+            "current-intent.json may not be changed in coding stage.",
+            current_intent_rel_norm,
+        )
+
+    if switch_detected:
         if stage == "coding":
             add_fail(
                 summary,
@@ -1390,7 +1493,6 @@ def validate(stage: str) -> Tuple[bool, List[Finding], Dict[str, Any], Optional[
             )
 
         # Switch and close cannot be combined
-        head_current_intent = load_json_from_git_show(current_intent_rel_norm, ref="HEAD")
         if isinstance(head_current_intent, dict):
             prev_pack_rel = head_current_intent.get("active_pack_path")
             if isinstance(prev_pack_rel, str) and prev_pack_rel.strip():
@@ -1404,8 +1506,10 @@ def validate(stage: str) -> Tuple[bool, List[Finding], Dict[str, Any], Optional[
                         prev_working_intent = json.loads((repo_root_resolved / prev_intent_json_rel).read_text(encoding="utf-8"))
                     except Exception:
                         prev_working_intent = None
-                    prev_head_status = str((prev_head_intent or {}).get("status", "open")).strip().lower()
-                    prev_working_status = str((prev_working_intent or {}).get("status", "open")).strip().lower()
+                    prev_head_status_norm, _ = normalize_intent_status((prev_head_intent or {}).get("status"))
+                    prev_working_status_norm, _ = normalize_intent_status((prev_working_intent or {}).get("status"))
+                    prev_head_status = prev_head_status_norm or "open"
+                    prev_working_status = prev_working_status_norm or "open"
                     if prev_head_status == "open" and prev_working_status == "closed":
                         add_fail(
                             summary,
@@ -1417,7 +1521,7 @@ def validate(stage: str) -> Tuple[bool, List[Finding], Dict[str, Any], Optional[
 
     # Close transaction strictness
     if close_transition:
-        if current_intent_changed:
+        if switch_detected:
             add_fail(
                 summary,
                 findings,
