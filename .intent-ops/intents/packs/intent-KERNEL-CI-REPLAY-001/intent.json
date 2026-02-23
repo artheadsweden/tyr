@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0",
+  "intent_id": "intent-KERNEL-CI-REPLAY-001",
+  "status": "open",
+  "goal": "Harden CI validation to replay commits per transaction and support synthetic merge commits.",
+  "kernel_upgrade": {
+    "allow_purple_paths": [
+      ".intent-ops/framework/tools/validate.py"
+    ]
+  },
+  "scope": {
+    "allowed_paths": [
+      ".intent-ops/**",
+      ".github/agents/intentops.*.agent.md"
+    ],
+    "forbidden_paths": [
+      ".intent-ops/framework/**"
+    ]
+  },
+  "operations": {
+    "allowed": [
+      "create_files",
+      "create_folders",
+      "edit_files"
+    ],
+    "forbidden": [
+      "refactor",
+      "formatting_only_changes",
+      "dependency_changes",
+      "runtime_behavior_changes"
+    ]
+  },
+  "acceptance_criteria": [
+    "ci stage validates commit-by-commit and no longer treats merge_base..HEAD as one transaction",
+    "ci handles GitHub synthetic merge commits deterministically",
+    "rename detection expands to delete+add and is enforced",
+    "validator report includes per-commit results"
+  ]
+}
