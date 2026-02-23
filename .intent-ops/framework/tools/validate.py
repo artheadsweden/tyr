@@ -258,6 +258,16 @@ def matches_any_glob(path: str, patterns: List[str]) -> bool:
     return False
 
 
+_GENERATED_OUTPUT_GLOBS = [
+    ".intent-ops/intents/*/**/evidence/logs/validator-report.*.json",
+]
+
+
+def is_ignored_generated(path: str) -> bool:
+    p = normalize_repo_rel_path(path)
+    return matches_any_glob(p, _GENERATED_OUTPUT_GLOBS)
+
+
 # ----------------------------
 # Validation core
 # ----------------------------
@@ -285,6 +295,7 @@ def make_summary(stage: str) -> Dict[str, Any]:
         "active_intent_id": None,
         "active_pack_path": None,
         "changed_files": [],
+        "ignored_changed_files": [],
         "findings": [],
         "debug": {},
     }
@@ -503,7 +514,18 @@ def validate(stage: str) -> Tuple[bool, List[Finding], Dict[str, Any], Optional[
         summary["findings"] = [{"level": f.level, "code": f.code, "message": f.message, "path": f.path} for f in findings]
         return False, findings, summary, active_pack, repo_root
 
+    ignored: List[ChangedFile] = []
+    effective_changed: List[ChangedFile] = []
+    for c in changed:
+        p = normalize_repo_rel_path(c.path)
+        if is_ignored_generated(p):
+            ignored.append(ChangedFile(path=p, status=c.status))
+            continue
+        effective_changed.append(ChangedFile(path=p, status=c.status))
+
+    changed = sorted(effective_changed, key=lambda x: x.path)
     summary["changed_files"] = [{"path": c.path, "status": c.status} for c in changed]
+    summary["ignored_changed_files"] = [{"path": c.path, "status": c.status} for c in ignored]
 
     # Zones
     zones_obj = zones.get("zones", {}) if isinstance(zones.get("zones", {}), dict) else {}
@@ -545,6 +567,9 @@ def validate(stage: str) -> Tuple[bool, List[Finding], Dict[str, Any], Optional[
     for c in changed:
         p = normalize_repo_rel_path(c.path)
 
+        if is_ignored_generated(p):
+            continue
+
         # Treat current-intent.json as a control file (not orange)
         if p == current_intent_rel_norm:
             if stage == "coding":
@@ -582,23 +607,12 @@ def validate(stage: str) -> Tuple[bool, List[Finding], Dict[str, Any], Optional[
             add_fail(summary, findings, "PURPLE_TOUCHED", "Framework (purple zone) must never be modified.", p)
             continue
 
-        if matches_any_glob(p, orange_paths):
-            if not is_under_active_pack(p):
-                add_fail(
-                    summary,
-                    findings,
-                    "ORANGE_OUTSIDE_ACTIVE_PACK",
-                    "Only the active intent pack may be modified under intents (orange zone).",
-                    p,
-                )
-            continue
-
-        if allowed_paths and not matches_any_glob(p, allowed_paths):
+        if matches_any_glob(p, orange_paths) and not is_under_active_pack(p):
             add_fail(
                 summary,
                 findings,
-                "SCOPE_VIOLATION_NOT_ALLOWED",
-                "Changed file is outside scope.allowed_paths for this intent.",
+                "ORANGE_OUTSIDE_ACTIVE_PACK",
+                "Only the active intent pack may be modified under intents (orange zone).",
                 p,
             )
             continue
@@ -609,6 +623,16 @@ def validate(stage: str) -> Tuple[bool, List[Finding], Dict[str, Any], Optional[
                 findings,
                 "SCOPE_VIOLATION_FORBIDDEN",
                 "Changed file matches scope.forbidden_paths (deny-wins).",
+                p,
+            )
+            continue
+
+        if allowed_paths and not matches_any_glob(p, allowed_paths):
+            add_fail(
+                summary,
+                findings,
+                "SCOPE_VIOLATION_NOT_ALLOWED",
+                "Changed file is outside scope.allowed_paths for this intent.",
                 p,
             )
             continue
