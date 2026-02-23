@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0",
+  "intent_id": "intent-VAR-NEXT-001",
+  "status": "open",
+  "goal": "Continue normal work under IntentOps VAR governance after bootstrap hardening.",
+  "scope": {
+    "allowed_paths": [
+      ".intent-ops/**",
+      ".github/agents/intentops.*.agent.md"
+    ],
+    "forbidden_paths": [
+      ".intent-ops/framework/**"
+    ]
+  },
+  "operations": {
+    "allowed": [
+      "create_files",
+      "create_folders",
+      "edit_files"
+    ],
+    "forbidden": [
+      "kernel_upgrades",
+      "dependency_changes",
+      "runtime_behavior_changes"
+    ]
+  },
+  "acceptance_criteria": [
+    "current-intent.json points to intent-VAR-NEXT-001",
+    "validator passes --stage verification for a clean repo",
+    "no changes occur under .intent-ops/framework/** during normal work"
+  ]
+}

@@ -1,0 +1,4 @@
+# IntentOps generated artifacts (do not version)
+
+# Validator reports written under packs/*/evidence/logs/
+intents/packs/**/evidence/logs/validator-report.*.json
