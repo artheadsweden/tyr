@@ -8,9 +8,9 @@
       ".github/agents/intentops.*.agent.md"
     ],
     "forbidden_paths": [
-      "**"
+      ".intent-ops/framework/**"
     ],
-    "notes": "No host project code changes are allowed in bootstrap."
+    "notes": "Bootstrap may only touch IntentOps internals and the dedicated agent files. The framework directory itself is immutable."
   },
   "operations": {
     "allowed": [
