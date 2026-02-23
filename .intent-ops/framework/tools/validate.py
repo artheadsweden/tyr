@@ -825,6 +825,25 @@ def validate(stage: str) -> Tuple[bool, List[Finding], Dict[str, Any], Optional[
         if is_ignored_generated(p):
             continue
 
+        # Patch 05: Symlink ban under governed roots
+        # - deterministic: only checks the working tree path
+        # - skip deletions and missing files
+        if not str(c.status).startswith("D") and (p.startswith(".intent-ops/") or p.startswith(".github/agents/")):
+            fs_path = repo_root_resolved / p
+            if fs_path.exists():
+                try:
+                    if os.path.islink(fs_path):
+                        add_fail(
+                            summary,
+                            findings,
+                            "SYMLINK_FORBIDDEN",
+                            "Symlinks are forbidden under governed roots (.intent-ops/** and .github/agents/**).",
+                            p,
+                        )
+                except Exception:
+                    # If the filesystem check fails, be conservative and let other checks run.
+                    pass
+
         # Treat current-intent.json as a control file (not orange)
         if p == current_intent_rel_norm:
             if stage == "coding":
