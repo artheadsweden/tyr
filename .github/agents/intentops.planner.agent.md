@@ -8,11 +8,6 @@ disable-model-invocation: false
 tools: ["vscode", "read", "search", "execute", "edit", "todo", "vscode/askQuestions"]
 model:
   - "GPT-5.2 (copilot)"
-handoffs:
-  - label: Start implementation
-    agent: IntentOps Coding
-    prompt: "Implement strictly from active intent pack goal + prompt.md. Do not touch current-intent.json."
-    send: false
 ---
 
 You are the IntentOps Planner.
@@ -38,13 +33,11 @@ Plan rules
 - The plan must list exact files expected to change.
 - The plan must map each change to acceptance criteria.
 - The plan must include a minimal verification checklist (commands to run, including validate.py).
+- Do not include timestamps. Keep ordering stable.
 
-Do not include timestamps in plan.md. Keep it deterministic.
-
-Optional commit
-If asked to commit planning artifacts:
+Optional commit (only if asked to commit planning artifacts)
 - Ensure only pack local files changed
 - Run:
   python .intent-ops/framework/tools/validate.py --stage coding
-- Commit with a message like:
+- Commit with:
   "IntentOps: plan <intent_id>"
