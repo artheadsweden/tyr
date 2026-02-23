@@ -472,6 +472,30 @@ def validate(stage: str) -> Tuple[bool, List[Finding], Dict[str, Any], Optional[
         summary["findings"] = [{"level": f.level, "code": f.code, "message": f.message, "path": f.path} for f in findings]
         return False, findings, summary, active_pack, repo_root
 
+    # Patch 06: framework.yml paths invariants
+    paths_obj = framework.get("paths")
+    if not isinstance(paths_obj, dict):
+        add_fail(summary, findings, "FRAMEWORK_PATHS_INVALID", "framework.yml must define a 'paths' mapping with required keys.")
+        summary["findings"] = [{"level": f.level, "code": f.code, "message": f.message, "path": f.path} for f in findings]
+        return False, findings, summary, active_pack, repo_root
+
+    required_path_keys = ("framework_root", "intents_root", "current_intent_file")
+    bad_path_keys: List[str] = []
+    for k in required_path_keys:
+        v = paths_obj.get(k)
+        if not isinstance(v, str) or not v.strip():
+            bad_path_keys.append(k)
+
+    if bad_path_keys:
+        add_fail(
+            summary,
+            findings,
+            "FRAMEWORK_PATHS_INVALID",
+            f"framework.yml paths must define non-empty strings for: {', '.join(bad_path_keys)}",
+        )
+        summary["findings"] = [{"level": f.level, "code": f.code, "message": f.message, "path": f.path} for f in findings]
+        return False, findings, summary, active_pack, repo_root
+
     lvl = effective_level(framework)
     summary["governance_level"] = lvl
 
@@ -490,6 +514,34 @@ def validate(stage: str) -> Tuple[bool, List[Finding], Dict[str, Any], Optional[
     except Exception as e:
         debug(f"zones load exception: {e!r}")
         add_fail(summary, findings, "ZONES_LOAD_FAILED", f"Failed to load zones.yml: {e}")
+        summary["findings"] = [{"level": f.level, "code": f.code, "message": f.message, "path": f.path} for f in findings]
+        return False, findings, summary, active_pack, repo_root
+
+    # Patch 06: zones.yml invariants
+    zones_obj = zones.get("zones")
+    if not isinstance(zones_obj, dict):
+        add_fail(summary, findings, "ZONES_SCHEMA_INVALID", "zones.yml must define a 'zones' mapping.")
+        summary["findings"] = [{"level": f.level, "code": f.code, "message": f.message, "path": f.path} for f in findings]
+        return False, findings, summary, active_pack, repo_root
+
+    purple_paths_inv = (zones_obj.get("purple", {}) or {}).get("paths")
+    orange_paths_inv = (zones_obj.get("orange", {}) or {}).get("paths")
+
+    def _valid_paths_list(v: Any) -> bool:
+        if not isinstance(v, list) or not v:
+            return False
+        for item in v:
+            if not isinstance(item, str) or not item.strip():
+                return False
+        return True
+
+    if not _valid_paths_list(purple_paths_inv) or not _valid_paths_list(orange_paths_inv):
+        add_fail(
+            summary,
+            findings,
+            "ZONES_SCHEMA_INVALID",
+            "zones.yml must define non-empty string lists for zones.purple.paths and zones.orange.paths.",
+        )
         summary["findings"] = [{"level": f.level, "code": f.code, "message": f.message, "path": f.path} for f in findings]
         return False, findings, summary, active_pack, repo_root
 
