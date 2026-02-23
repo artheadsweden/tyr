@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "intent_id": "intent-KERNEL-CI-REPLAY-001",
-  "status": "open",
+  "status": "closed",
   "goal": "Harden CI validation to replay commits per transaction and support synthetic merge commits.",
   "kernel_upgrade": {
     "allow_purple_paths": [
