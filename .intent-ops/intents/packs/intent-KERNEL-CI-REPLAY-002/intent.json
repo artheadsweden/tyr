@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "intent_id": "intent-KERNEL-CI-REPLAY-002",
-  "status": "open",
+  "status": "closed",
   "goal": "Make CI commit replay bootstrap-aware and make switch detection pointer-based; add legacy intent.status mapping.",
   "kernel_upgrade": {
     "allow_purple_paths": [
