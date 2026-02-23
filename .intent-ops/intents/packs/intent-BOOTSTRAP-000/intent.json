@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "intent_id": "intent-BOOTSTRAP-000",
-  "status": "open",
+  "status": "closed",
   "goal": "Establish the IntentOps folder structure, base configuration files, and Copilot agent entrypoint without modifying host project source code.",
   "kernel_upgrade": {
     "allow_purple_paths": [
