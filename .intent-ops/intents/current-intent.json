@@ -2,7 +2,6 @@
   "schema_version": "1.0",
   "active_intent_id": "intent-BOOTSTRAP-000",
   "active_pack_path": "packs/intent-BOOTSTRAP-000",
-  "governance_level": "var",
   "locked": false,
   "updated_at": "2026-02-23T00:00:00Z",
   "notes": "Bootstrap intent pack for initial framework setup."

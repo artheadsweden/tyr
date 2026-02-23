@@ -4,7 +4,7 @@ zones:
       - ".intent-ops/framework/**"
   orange:
     paths:
-      - ".intent-ops/intents/**"
+      - ".intent-ops/intents/*/**"
   red:
     paths: []
   yellow:

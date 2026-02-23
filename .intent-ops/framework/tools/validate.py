@@ -301,20 +301,41 @@ def add_fail(summary: Dict[str, Any], findings: List[Finding], code: str, msg: s
     summary["pass"] = False
 
 
+def normalize_repo_rel_path(path: str) -> str:
+    p = str(path).replace("\\", "/").strip()
+    while p.startswith("./"):
+        p = p[2:]
+    p = p.lstrip("/")
+    p = os.path.normpath(p).replace("\\", "/")
+    return p
+
+
 def load_framework_config(repo_root: Path) -> Dict[str, Any]:
     fpath = repo_root / ".intent-ops" / "framework" / "config" / "framework.yml"
     debug(f"load_framework_config: {fpath}")
     return load_yaml_subset(fpath)
 
 
-def load_zones_config(repo_root: Path) -> Dict[str, Any]:
-    zpath = repo_root / ".intent-ops" / "framework" / "config" / "zones.yml"
+def derive_framework_paths(framework: Dict[str, Any]) -> Dict[str, str]:
+    paths = framework.get("paths", {}) if isinstance(framework.get("paths", {}), dict) else {}
+    framework_root = normalize_repo_rel_path(paths.get("framework_root", ".intent-ops/framework"))
+    intents_root = normalize_repo_rel_path(paths.get("intents_root", ".intent-ops/intents"))
+    current_intent_file = normalize_repo_rel_path(paths.get("current_intent_file", ".intent-ops/intents/current-intent.json"))
+    return {
+        "framework_root": framework_root,
+        "intents_root": intents_root,
+        "current_intent_file": current_intent_file,
+    }
+
+
+def load_zones_config(repo_root: Path, framework_root: str) -> Dict[str, Any]:
+    zpath = repo_root / framework_root / "config" / "zones.yml"
     debug(f"load_zones_config: {zpath}")
     return load_yaml_subset(zpath)
 
 
-def load_current_intent(repo_root: Path) -> Dict[str, Any]:
-    cpath = repo_root / ".intent-ops" / "intents" / "current-intent.json"
+def load_current_intent(repo_root: Path, current_intent_file: str) -> Dict[str, Any]:
+    cpath = repo_root / current_intent_file
     debug(f"load_current_intent: {cpath}")
     if not cpath.exists():
         raise FileNotFoundError(str(cpath))
@@ -323,13 +344,13 @@ def load_current_intent(repo_root: Path) -> Dict[str, Any]:
     return data
 
 
-def resolve_active_pack(repo_root: Path, current_intent: Dict[str, Any]) -> Path:
-    intents_root = (repo_root / ".intent-ops" / "intents").resolve()
+def resolve_active_pack(intents_root: Path, current_intent: Dict[str, Any]) -> Path:
+    intents_root = intents_root.resolve()
     pack_rel = current_intent.get("active_pack_path")
     debug(f"resolve_active_pack: intents_root={intents_root} active_pack_path={pack_rel!r}")
     if not isinstance(pack_rel, str) or not pack_rel:
         raise ValueError("current-intent.json missing/invalid active_pack_path")
-    pack_path = (intents_root / pack_rel).resolve()
+    pack_path = (intents_root / normalize_repo_rel_path(pack_rel)).resolve()
     debug(f"resolve_active_pack: resolved={pack_path}")
     if intents_root not in pack_path.parents and pack_path != intents_root:
         raise ValueError("active_pack_path escapes intents root")
@@ -384,9 +405,18 @@ def validate(stage: str) -> Tuple[bool, List[Finding], Dict[str, Any], Optional[
     lvl = effective_level(framework)
     summary["governance_level"] = lvl
 
+    fw_paths = derive_framework_paths(framework)
+    framework_root_rel = fw_paths["framework_root"]
+    intents_root_rel = fw_paths["intents_root"]
+    current_intent_file_rel = fw_paths["current_intent_file"]
+
+    add_debug(summary, "framework_root", framework_root_rel)
+    add_debug(summary, "intents_root", intents_root_rel)
+    add_debug(summary, "current_intent_file", current_intent_file_rel)
+
     # zones.yml
     try:
-        zones = load_zones_config(repo_root)
+        zones = load_zones_config(repo_root, framework_root_rel)
     except Exception as e:
         debug(f"zones load exception: {e!r}")
         add_fail(summary, findings, "ZONES_LOAD_FAILED", f"Failed to load zones.yml: {e}")
@@ -395,13 +425,20 @@ def validate(stage: str) -> Tuple[bool, List[Finding], Dict[str, Any], Optional[
 
     # current-intent.json
     try:
-        current_intent = load_current_intent(repo_root)
+        current_intent = load_current_intent(repo_root, current_intent_file_rel)
+
+        required_ci_keys = ("schema_version", "active_intent_id", "active_pack_path")
+        missing_ci = [k for k in required_ci_keys if k not in current_intent]
+        if missing_ci:
+            raise ValueError(f"current-intent.json missing required keys: {', '.join(missing_ci)}")
+
         summary["active_intent_id"] = current_intent.get("active_intent_id")
         summary["active_pack_path"] = current_intent.get("active_pack_path")
-        active_pack = resolve_active_pack(repo_root, current_intent)
+        intents_root_abs = (repo_root.resolve() / intents_root_rel).resolve()
+        active_pack = resolve_active_pack(intents_root_abs, current_intent)
     except Exception as e:
         debug(f"current intent resolve exception: {e!r}")
-        add_fail(summary, findings, "CURRENT_INTENT_INVALID", f"Failed to resolve current intent: {e}")
+        add_fail(summary, findings, "CURRENT_INTENT_SCHEMA_INVALID", f"Failed to load/validate current intent control file: {e}")
         summary["findings"] = [{"level": f.level, "code": f.code, "message": f.message, "path": f.path} for f in findings]
         return False, findings, summary, active_pack, repo_root
 
@@ -422,10 +459,23 @@ def validate(stage: str) -> Tuple[bool, List[Finding], Dict[str, Any], Optional[
         return False, findings, summary, active_pack, repo_root
 
     # Minimal contract checks
-    required_keys = ("schema_version", "intent_id", "goal", "scope", "operations", "acceptance_criteria")
+    required_keys = ("schema_version", "intent_id", "goal", "status", "scope", "operations", "acceptance_criteria")
     for req_key in required_keys:
         if req_key not in intent:
             add_fail(summary, findings, "INTENT_SCHEMA_MINIMAL", f"intent.json missing required key: {req_key}")
+
+    status = str(intent.get("status", "")).strip().lower()
+    if status not in ("open", "closed"):
+        add_fail(summary, findings, "INTENT_STATUS_INVALID", "intent.status must be either 'open' or 'closed'.")
+
+    if current_intent.get("active_intent_id") != intent.get("intent_id"):
+        add_fail(
+            summary,
+            findings,
+            "ACTIVE_INTENT_ID_MISMATCH",
+            "current-intent.json active_intent_id must match the active pack intent.json intent_id.",
+            current_intent_file_rel,
+        )
 
     scope = intent.get("scope", {}) if isinstance(intent.get("scope", {}), dict) else {}
     allowed_paths = scope.get("allowed_paths", [])
@@ -464,7 +514,7 @@ def validate(stage: str) -> Tuple[bool, List[Finding], Dict[str, Any], Optional[
     add_debug(summary, "orange_paths", orange_paths)
 
     repo_root_resolved = repo_root.resolve()
-    intents_root = (repo_root_resolved / ".intent-ops" / "intents").resolve()
+    intents_root = (repo_root_resolved / intents_root_rel).resolve()
 
     active_pack_rel_from_intents = os.path.relpath(active_pack.resolve(), intents_root).replace("\\", "/")
     active_pack_prefix = (active_pack_rel_from_intents.rstrip("/") + "/") if active_pack_rel_from_intents != "." else ""
@@ -481,11 +531,54 @@ def validate(stage: str) -> Tuple[bool, List[Finding], Dict[str, Any], Optional[
             return False
         return rel == active_pack_rel_from_intents or rel.startswith(active_pack_prefix)
 
+    kernel_upgrade = intent.get("kernel_upgrade", {}) if isinstance(intent.get("kernel_upgrade", {}), dict) else {}
+    allow_purple_paths = kernel_upgrade.get("allow_purple_paths", [])
+    if allow_purple_paths is None:
+        allow_purple_paths = []
+    if not isinstance(allow_purple_paths, list):
+        allow_purple_paths = []
+    allow_purple_paths = [str(x) for x in allow_purple_paths if isinstance(x, str) and str(x).strip()]
+
+    current_intent_rel_norm = normalize_repo_rel_path(current_intent_file_rel)
+
     # Apply rules
     for c in changed:
-        p = c.path.replace("\\", "/")
+        p = normalize_repo_rel_path(c.path)
+
+        # Treat current-intent.json as a control file (not orange)
+        if p == current_intent_rel_norm:
+            if stage == "coding":
+                add_fail(
+                    summary,
+                    findings,
+                    "CURRENT_INTENT_CHANGED_IN_CODING",
+                    "current-intent.json may not be changed in coding stage.",
+                    p,
+                )
+            continue
 
         if matches_any_glob(p, purple_paths):
+            if allow_purple_paths:
+                if stage not in ("verification", "ci"):
+                    add_fail(
+                        summary,
+                        findings,
+                        "KERNEL_UPGRADE_FORBIDDEN_STAGE",
+                        "Kernel upgrade allowlist for purple paths is only permitted in verification or ci stage.",
+                        p,
+                    )
+                    continue
+                if matches_any_glob(p, allow_purple_paths):
+                    continue
+                add_fail(
+                    summary,
+                    findings,
+                    "PURPLE_TOUCHED_NOT_ALLOWLISTED",
+                    "Purple zone file modified but not in kernel_upgrade.allow_purple_paths allowlist.",
+                    p,
+                )
+                continue
+
             add_fail(summary, findings, "PURPLE_TOUCHED", "Framework (purple zone) must never be modified.", p)
             continue
 
