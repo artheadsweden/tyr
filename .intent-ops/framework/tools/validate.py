@@ -13,7 +13,7 @@ Options:
 Stages:
   - coding: checks working tree + staged changes
   - verification: checks staged changes only (pre-commit hook)
-  - ci: checks changes vs origin/main...HEAD (fallback HEAD~1...HEAD), best-effort
+    - ci: deterministic commit-by-commit replay across the CI range
 """
 
 from __future__ import annotations
@@ -180,6 +180,84 @@ def load_yaml_subset(path: Path) -> Dict[str, Any]:
     return root
 
 
+def load_yaml_subset_text(text: str) -> Dict[str, Any]:
+    lines = str(text).splitlines()
+
+    cleaned: List[Tuple[int, str]] = []
+    for raw in lines:
+        line = raw.rstrip("\n")
+
+        if not line.strip():
+            continue
+        if line.lstrip().startswith("#"):
+            continue
+
+        if " #" in line:
+            line = line.split(" #", 1)[0].rstrip()
+
+        if not line.strip():
+            continue
+        if line.lstrip().startswith("#"):
+            continue
+
+        indent = len(line) - len(line.lstrip(" "))
+        cleaned.append((indent, line.lstrip(" ")))
+
+    root: Dict[str, Any] = {}
+    stack: List[Tuple[int, Any]] = [(0, root)]
+
+    def current_container() -> Any:
+        return stack[-1][1]
+
+    i = 0
+    while i < len(cleaned):
+        indent, content = cleaned[i]
+
+        while stack and indent < stack[-1][0]:
+            stack.pop()
+        if not stack:
+            raise ValueError(f"Invalid YAML indentation near: {content!r}")
+
+        container = current_container()
+
+        if content.startswith("- "):
+            if not isinstance(container, list):
+                raise ValueError(f"List item found but container is not a list near: {content!r}")
+            container.append(_parse_scalar(content[2:]))
+            i += 1
+            continue
+
+        if ":" not in content:
+            raise ValueError(f"Invalid YAML line (missing ':'): {content!r}")
+
+        key, rest = content.split(":", 1)
+        key = key.strip()
+        rest = rest.strip()
+
+        if rest == "":
+            next_is_list = False
+            if i + 1 < len(cleaned):
+                next_indent, next_content = cleaned[i + 1]
+                if next_indent > indent and next_content.startswith("- "):
+                    next_is_list = True
+
+            new_container: Any = [] if next_is_list else {}
+            if not isinstance(container, dict):
+                raise ValueError(f"Mapping entry found but container is not a dict near: {content!r}")
+
+            container[key] = new_container
+            stack.append((indent + 1, new_container))
+            i += 1
+            continue
+
+        if not isinstance(container, dict):
+            raise ValueError(f"Mapping entry found but container is not a dict near: {content!r}")
+        container[key] = _parse_scalar(rest)
+        i += 1
+
+    return root
+
+
 # ----------------------------
 # Git helpers
 # ----------------------------
@@ -216,6 +294,106 @@ def _git_ref_exists(ref: str) -> bool:
         return True
     except Exception:
         return False
+
+
+def is_ci_environment() -> bool:
+    return bool(os.environ.get("CI")) or bool(os.environ.get("GITHUB_ACTIONS"))
+
+
+def git_commit_parents(commit: str) -> List[str]:
+    out = run_git(["rev-list", "--parents", "-n", "1", commit]).strip()
+    if not out:
+        return []
+    parts = out.split()
+    if len(parts) <= 1:
+        return []
+    return parts[1:]
+
+
+def git_first_parent(commit: str) -> Optional[str]:
+    parents = git_commit_parents(commit)
+    return parents[0] if parents else None
+
+
+def select_ci_base_ref(framework: Dict[str, Any]) -> Optional[str]:
+    cfg = framework.get("governance", {}) if isinstance(framework.get("governance", {}), dict) else {}
+    ci_cfg = cfg.get("ci", {}) if isinstance(cfg.get("ci", {}), dict) else {}
+    candidates = ci_cfg.get("base_ref_candidates")
+
+    base_candidates: List[str]
+    if isinstance(candidates, list) and all(isinstance(x, str) and str(x).strip() for x in candidates):
+        base_candidates = [str(x).strip() for x in candidates]
+    else:
+        base_candidates = ["origin/main", "origin/master", "main", "master"]
+
+    for cand in base_candidates:
+        if _git_ref_exists(cand):
+            return cand
+    return None
+
+
+def detect_synthetic_merge_head(base_ref: str) -> Tuple[str, bool, Dict[str, Any]]:
+    parents = git_commit_parents("HEAD")
+    is_merge = len(parents) == 2
+
+    meta: Dict[str, Any] = {
+        "ci_head_is_merge": is_merge,
+        "ci_synthetic_merge": False,
+        "ci_pr_head": run_git(["rev-parse", "HEAD"]).strip(),
+        "ci_head_parents": parents,
+    }
+
+    if not is_merge:
+        return meta["ci_pr_head"], False, meta
+
+    p1 = run_git(["rev-parse", "HEAD^1"]).strip()
+    p2 = run_git(["rev-parse", "HEAD^2"]).strip()
+    base_tip = run_git(["rev-parse", base_ref]).strip()
+    if p1 == base_tip:
+        meta["ci_synthetic_merge"] = True
+        meta["ci_pr_head"] = p2
+        return p2, True, meta
+
+    return meta["ci_pr_head"], False, meta
+
+
+def git_diff_tree_name_status(commit: str) -> str:
+    return run_git(["diff-tree", "--name-status", "-r", "--no-commit-id", "--root", commit])
+
+
+def parse_name_status_with_rename_expansion(output: str) -> List[ChangedFile]:
+    out: List[ChangedFile] = []
+    for line in str(output).splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        status = parts[0].strip()
+
+        if (status.startswith("R") or status.startswith("C")) and len(parts) >= 3:
+            old_path = normalize_repo_rel_path(parts[1].strip())
+            new_path = normalize_repo_rel_path(parts[2].strip())
+            out.append(ChangedFile(path=old_path, status="D"))
+            out.append(ChangedFile(path=new_path, status="A"))
+            continue
+
+        if len(parts) >= 2:
+            path = normalize_repo_rel_path(parts[1].strip())
+            out.append(ChangedFile(path=path, status=status))
+
+    return sorted(out, key=lambda x: (x.path, x.status))
+
+
+def is_symlink_in_ref(ref: str, repo_rel_path: str) -> bool:
+    p = normalize_repo_rel_path(repo_rel_path)
+    try:
+        out = run_git(["ls-tree", ref, "--", p]).strip()
+    except Exception:
+        return False
+    if not out:
+        return False
+    first_line = out.splitlines()[0]
+    mode = first_line.split()[0] if first_line.split() else ""
+    return mode.startswith("120000")
 
 
 def list_changed_files(stage: str) -> Tuple[List[ChangedFile], Dict[str, Any]]:
@@ -340,9 +518,17 @@ def make_summary(stage: str) -> Dict[str, Any]:
         "active_pack_path": None,
         "changed_files": [],
         "ignored_changed_files": [],
+        "ci_mode": None,
         "ci_base_ref": None,
+        "ci_base_tip": None,
+        "ci_pr_head": None,
+        "ci_head_is_merge": None,
+        "ci_head_parents": None,
+        "ci_synthetic_merge": None,
         "ci_merge_base": None,
         "ci_fallback_mode": None,
+        "ci_commit_count": 0,
+        "ci_commits": [],
         "findings": [],
         "debug": {},
     }
@@ -357,6 +543,10 @@ def add_debug(summary: Dict[str, Any], key: str, value: Any) -> None:
 def add_fail(summary: Dict[str, Any], findings: List[Finding], code: str, msg: str, path: Optional[str] = None) -> None:
     findings.append(Finding("fail", code, msg, path))
     summary["pass"] = False
+
+
+def add_warn(summary: Dict[str, Any], findings: List[Finding], code: str, msg: str, path: Optional[str] = None) -> None:
+    findings.append(Finding("warn", code, msg, path))
 
 
 def normalize_repo_rel_path(path: str) -> str:
@@ -437,6 +627,263 @@ def load_json_from_git_show(repo_rel_path: str, ref: str = "HEAD") -> Optional[D
         return None
 
 
+def load_yaml_subset_from_git_show(repo_rel_path: str, ref: str) -> Optional[Dict[str, Any]]:
+    p = normalize_repo_rel_path(repo_rel_path)
+    try:
+        raw = run_git(["show", f"{ref}:{p}"])
+    except Exception:
+        return None
+    try:
+        return load_yaml_subset_text(raw)
+    except Exception:
+        return None
+
+
+def _findings_sorted(findings_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def key_fn(x: Dict[str, Any]) -> Tuple[str, str]:
+        return (str(x.get("code", "")), str(x.get("path") or ""))
+
+    return sorted(findings_list, key=key_fn)
+
+
+def validate_commit_snapshot(commit: str, parent: Optional[str], changed: List[ChangedFile]) -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        "commit": commit,
+        "parent": parent,
+        "pass": True,
+        "skipped": False,
+        "active_intent_id": None,
+        "active_pack_path": None,
+        "changed_files": [],
+        "ignored_changed_files": [],
+        "findings": [],
+    }
+
+    def add_commit_fail(code: str, message: str, path: Optional[str] = None) -> None:
+        result["pass"] = False
+        result["findings"].append({"level": "fail", "code": code, "message": message, "path": path})
+
+    ignored: List[ChangedFile] = []
+    eff: List[ChangedFile] = []
+    for c in changed:
+        p = normalize_repo_rel_path(c.path)
+        if is_ignored_generated(p):
+            ignored.append(ChangedFile(path=p, status=c.status))
+        else:
+            eff.append(ChangedFile(path=p, status=c.status))
+
+    eff = sorted(eff, key=lambda x: (x.path, x.status))
+    ignored = sorted(ignored, key=lambda x: (x.path, x.status))
+
+    result["changed_files"] = [{"path": c.path, "status": c.status} for c in eff]
+    result["ignored_changed_files"] = [{"path": c.path, "status": c.status} for c in ignored]
+
+    governed_patterns = [".intent-ops/**", ".github/agents/intentops.*.agent.md"]
+    touches_governed = any(matches_any_glob(c.path, governed_patterns) for c in eff)
+
+    framework_at = load_yaml_subset_from_git_show(".intent-ops/framework/config/framework.yml", ref=commit)
+    if framework_at is None:
+        if touches_governed:
+            add_commit_fail("CI_KERNEL_MISSING_IN_COMMIT", "Commit touches governed roots before the kernel exists.")
+        else:
+            result["skipped"] = True
+        result["findings"] = _findings_sorted(result["findings"])
+        return result
+
+    fw_paths = derive_framework_paths(framework_at)
+    framework_root_rel = fw_paths["framework_root"]
+    intents_root_rel = fw_paths["intents_root"]
+    current_intent_file_rel = fw_paths["current_intent_file"]
+
+    current_intent_at = load_json_from_git_show(current_intent_file_rel, ref=commit)
+    if current_intent_at is None:
+        if touches_governed:
+            add_commit_fail("CI_KERNEL_MISSING_IN_COMMIT", "Commit touches governed roots before current-intent control file exists.")
+        else:
+            result["skipped"] = True
+        result["findings"] = _findings_sorted(result["findings"])
+        return result
+
+    required_ci_keys = ("schema_version", "active_intent_id", "active_pack_path")
+    if any(k not in current_intent_at for k in required_ci_keys):
+        add_commit_fail("CURRENT_INTENT_SCHEMA_INVALID", "current-intent.json missing required keys.", current_intent_file_rel)
+        result["findings"] = _findings_sorted(result["findings"])
+        return result
+
+    result["active_intent_id"] = current_intent_at.get("active_intent_id")
+    result["active_pack_path"] = current_intent_at.get("active_pack_path")
+
+    active_pack_path_rel = str(current_intent_at.get("active_pack_path") or "").strip()
+    active_pack_repo_prefix = normalize_repo_rel_path(f"{intents_root_rel}/{active_pack_path_rel}").rstrip("/") + "/"
+    active_intent_json_rel = normalize_repo_rel_path(active_pack_repo_prefix + "intent.json")
+
+    intent_at = load_json_from_git_show(active_intent_json_rel, ref=commit)
+    if intent_at is None:
+        add_commit_fail("INTENT_LOAD_FAILED", "Active pack intent.json missing or unreadable at this commit.", active_intent_json_rel)
+        result["findings"] = _findings_sorted(result["findings"])
+        return result
+
+    cur_status = str(intent_at.get("status", "")).strip().lower()
+    if cur_status not in ("open", "closed"):
+        add_commit_fail("INTENT_STATUS_INVALID", "intent.status must be either 'open' or 'closed'.", active_intent_json_rel)
+
+    kernel_upgrade = intent_at.get("kernel_upgrade", {}) if isinstance(intent_at.get("kernel_upgrade", {}), dict) else {}
+    allow_purple_paths = kernel_upgrade.get("allow_purple_paths", [])
+    if not isinstance(allow_purple_paths, list):
+        allow_purple_paths = []
+    allow_purple_paths = [normalize_repo_rel_path(x) for x in allow_purple_paths if isinstance(x, str) and str(x).strip()]
+
+    scope = intent_at.get("scope", {}) if isinstance(intent_at.get("scope", {}), dict) else {}
+    allowed_paths = scope.get("allowed_paths", [])
+    forbidden_paths = scope.get("forbidden_paths", [])
+    if not isinstance(allowed_paths, list):
+        allowed_paths = []
+    if forbidden_paths is None:
+        forbidden_paths = []
+    if not isinstance(forbidden_paths, list):
+        forbidden_paths = []
+
+    # zones (commit-scoped)
+    zones_path_rel = normalize_repo_rel_path(f"{framework_root_rel}/config/zones.yml")
+    zones_at = load_yaml_subset_from_git_show(zones_path_rel, ref=commit)
+    if zones_at is None:
+        add_commit_fail("ZONES_LOAD_FAILED", "zones.yml missing or unreadable at this commit.", zones_path_rel)
+        result["findings"] = _findings_sorted(result["findings"])
+        return result
+
+    zones_obj = zones_at.get("zones", {}) if isinstance(zones_at.get("zones", {}), dict) else {}
+    purple_paths = (zones_obj.get("purple", {}) or {}).get("paths", []) or []
+    orange_paths = (zones_obj.get("orange", {}) or {}).get("paths", []) or []
+    if not isinstance(purple_paths, list):
+        purple_paths = []
+    if not isinstance(orange_paths, list):
+        orange_paths = []
+
+    purple_effective = [normalize_repo_rel_path(x) for x in purple_paths if isinstance(x, str) and str(x).strip()]
+
+    orange_effective = [normalize_repo_rel_path(x) for x in orange_paths if isinstance(x, str) and str(x).strip()]
+    current_intent_rel_norm = normalize_repo_rel_path(current_intent_file_rel)
+
+    # Transition state using parent snapshot
+    prev_status = "open"
+    if parent:
+        prev_intent = load_json_from_git_show(active_intent_json_rel, ref=parent)
+        if isinstance(prev_intent, dict):
+            prev_status = str(prev_intent.get("status", "open")).strip().lower()
+
+    close_transition = prev_status == "open" and cur_status == "closed"
+    closed_to_open = prev_status == "closed" and cur_status == "open"
+
+    current_intent_changed = any(c.path == current_intent_rel_norm for c in eff)
+
+    if closed_to_open:
+        add_commit_fail("CLOSED_TO_OPEN_FORBIDDEN", "Closed intents may not be reopened (closed -> open is forbidden).", active_intent_json_rel)
+
+    # Closed means immutable based on parent snapshot
+    if prev_status == "closed":
+        for c in eff:
+            if c.path.startswith(active_pack_repo_prefix):
+                add_commit_fail("CLOSED_INTENT_IMMUTABLE", "Closed intent is immutable; pack files cannot be modified.", c.path)
+
+    # Switch transaction strictness
+    if current_intent_changed:
+        for c in eff:
+            if c.path == current_intent_rel_norm:
+                continue
+            if c.path.startswith(active_pack_repo_prefix):
+                continue
+            add_commit_fail(
+                "SWITCH_TRANSACTION_MIXED_CHANGES",
+                "When current-intent.json changes, only current-intent.json and files under the new active pack may change.",
+                c.path,
+            )
+
+        if cur_status == "closed":
+            add_commit_fail("CLOSED_INTENT_NOT_ACTIVATABLE", "Cannot switch to a closed intent pack.", active_intent_json_rel)
+
+        if parent:
+            parent_framework = load_yaml_subset_from_git_show(".intent-ops/framework/config/framework.yml", ref=parent)
+            parent_paths = derive_framework_paths(parent_framework) if isinstance(parent_framework, dict) else None
+            parent_ci_path = parent_paths["current_intent_file"] if parent_paths else current_intent_file_rel
+            parent_current_intent = load_json_from_git_show(parent_ci_path, ref=parent)
+            if isinstance(parent_current_intent, dict):
+                prev_pack_rel = parent_current_intent.get("active_pack_path")
+                if isinstance(prev_pack_rel, str) and prev_pack_rel.strip():
+                    prev_pack_prefix = normalize_repo_rel_path(f"{intents_root_rel}/{prev_pack_rel}").rstrip("/") + "/"
+                    prev_intent_json = normalize_repo_rel_path(prev_pack_prefix + "intent.json")
+                    prev_intent_parent = load_json_from_git_show(prev_intent_json, ref=parent)
+                    prev_intent_cur = load_json_from_git_show(prev_intent_json, ref=commit)
+                    prev_parent_status = str((prev_intent_parent or {}).get("status", "open")).strip().lower()
+                    prev_cur_status = str((prev_intent_cur or {}).get("status", "open")).strip().lower()
+                    if prev_parent_status == "open" and prev_cur_status == "closed":
+                        add_commit_fail(
+                            "SWITCH_AND_CLOSE_COMBINED",
+                            "Switching active intent and closing the previous intent cannot be combined in one commit.",
+                            prev_intent_json,
+                        )
+
+    # Close transaction strictness
+    if close_transition:
+        if current_intent_changed:
+            add_commit_fail(
+                "SWITCH_AND_CLOSE_COMBINED",
+                "Switching active intent and closing an intent cannot be combined in one commit.",
+                active_intent_json_rel,
+            )
+        for c in eff:
+            if c.path != active_intent_json_rel:
+                add_commit_fail(
+                    "CLOSE_TRANSACTION_MIXED_CHANGES",
+                    "When closing an intent, only the intent.json status flip is permitted.",
+                    c.path,
+                )
+
+    # Enforce zones + scope per file
+    for c in eff:
+        p = c.path
+
+        if p == current_intent_rel_norm:
+            continue
+
+        # Symlink ban (tree-based)
+        if not str(c.status).startswith("D") and (p.startswith(".intent-ops/") or p.startswith(".github/agents/")):
+            if is_symlink_in_ref(commit, p):
+                add_commit_fail("SYMLINK_FORBIDDEN", "Symlinks are forbidden under governed roots.", p)
+
+        # Purple
+        if matches_any_glob(p, purple_effective):
+            if allow_purple_paths and matches_any_glob(p, allow_purple_paths):
+                pass
+            else:
+                add_commit_fail(
+                    "PURPLE_TOUCHED_NOT_ALLOWLISTED",
+                    "Purple zone file modified but not in kernel_upgrade.allow_purple_paths allowlist.",
+                    p,
+                )
+            continue
+
+        # Orange
+        if matches_any_glob(p, orange_effective) and not p.startswith(active_pack_repo_prefix):
+            add_commit_fail(
+                "ORANGE_OUTSIDE_ACTIVE_PACK",
+                "Only the active intent pack may be modified under intents (orange zone).",
+                p,
+            )
+            continue
+
+        # Scope deny-wins
+        if forbidden_paths and matches_any_glob(p, [normalize_repo_rel_path(x) for x in forbidden_paths if isinstance(x, str)]):
+            add_commit_fail("SCOPE_VIOLATION_FORBIDDEN", "Changed file matches scope.forbidden_paths (deny-wins).", p)
+            continue
+
+        if allowed_paths and not matches_any_glob(p, [normalize_repo_rel_path(x) for x in allowed_paths if isinstance(x, str)]):
+            add_commit_fail("SCOPE_VIOLATION_NOT_ALLOWED", "Changed file is outside scope.allowed_paths for this intent.", p)
+            continue
+
+    result["findings"] = _findings_sorted(result["findings"])
+    return result
+
+
 def effective_level(framework: Dict[str, Any]) -> str:
     lvl = framework.get("governance", {}).get("level", "var")
     lvl = str(lvl).strip().lower()
@@ -508,7 +955,161 @@ def validate(stage: str) -> Tuple[bool, List[Finding], Dict[str, Any], Optional[
     add_debug(summary, "intents_root", intents_root_rel)
     add_debug(summary, "current_intent_file", current_intent_file_rel)
 
-    # zones.yml
+    # current-intent.json
+    try:
+        current_intent = load_current_intent(repo_root, current_intent_file_rel)
+
+        required_ci_keys = ("schema_version", "active_intent_id", "active_pack_path")
+        missing_ci = [k for k in required_ci_keys if k not in current_intent]
+        if missing_ci:
+            raise ValueError(f"current-intent.json missing required keys: {', '.join(missing_ci)}")
+
+        summary["active_intent_id"] = current_intent.get("active_intent_id")
+        summary["active_pack_path"] = current_intent.get("active_pack_path")
+        intents_root_abs = (repo_root.resolve() / intents_root_rel).resolve()
+        active_pack = resolve_active_pack(intents_root_abs, current_intent)
+    except Exception as e:
+        debug(f"current intent resolve exception: {e!r}")
+        add_fail(summary, findings, "CURRENT_INTENT_SCHEMA_INVALID", f"Failed to load/validate current intent control file: {e}")
+        summary["findings"] = [{"level": f.level, "code": f.code, "message": f.message, "path": f.path} for f in findings]
+        return False, findings, summary, active_pack, repo_root
+
+    add_debug(summary, "active_pack_resolved", str(active_pack))
+
+    if active_pack is None or not active_pack.exists():
+        add_fail(summary, findings, "ACTIVE_PACK_MISSING", f"Active intent pack does not exist: {active_pack}")
+        summary["findings"] = [{"level": f.level, "code": f.code, "message": f.message, "path": f.path} for f in findings]
+        return False, findings, summary, active_pack, repo_root
+
+    # ----------------------------
+    # CI mode: deterministic commit replay
+    # ----------------------------
+    if stage == "ci":
+        # Dirty worktree gates (CI-level only)
+        try:
+            ci_unstaged = [normalize_repo_rel_path(x) for x in run_git(["diff", "--name-only"]).splitlines() if x.strip()]
+            ci_unstaged = [p for p in ci_unstaged if not is_ignored_generated(p)]
+        except Exception as e:
+            ci_unstaged = []
+            debug(f"ci dirty gate (unstaged) failed to evaluate: {e!r}")
+
+        try:
+            ci_untracked = [
+                normalize_repo_rel_path(x) for x in run_git(["ls-files", "--others", "--exclude-standard"]).splitlines() if x.strip()
+            ]
+            ci_untracked = [p for p in ci_untracked if not is_ignored_generated(p)]
+        except Exception as e:
+            ci_untracked = []
+            debug(f"ci dirty gate (untracked) failed to evaluate: {e!r}")
+
+        if ci_unstaged:
+            add_fail(
+                summary,
+                findings,
+                "CI_DIRTY_WORKTREE",
+                "ci stage requires a clean working tree (no unstaged tracked changes).",
+                ci_unstaged[0],
+            )
+
+        if ci_untracked:
+            add_fail(
+                summary,
+                findings,
+                "CI_UNTRACKED_PRESENT",
+                "ci stage requires no untracked files (excluding ignored generated outputs).",
+                ci_untracked[0],
+            )
+
+        base_ref = select_ci_base_ref(framework)
+        if not base_ref:
+            add_fail(
+                summary,
+                findings,
+                "CI_BASE_REF_UNAVAILABLE",
+                "No configured CI base ref candidates exist in this clone.",
+            )
+
+        if findings:
+            summary["ci_mode"] = "commit_replay"
+            summary["ci_base_ref"] = base_ref
+            summary["findings"] = [{"level": f.level, "code": f.code, "message": f.message, "path": f.path} for f in findings]
+            ok = summary["pass"] is True
+            return ok, findings, summary, active_pack, repo_root
+
+        summary["ci_mode"] = "commit_replay"
+        summary["ci_base_ref"] = base_ref
+        try:
+            summary["ci_base_tip"] = run_git(["rev-parse", base_ref]).strip()
+        except Exception:
+            summary["ci_base_tip"] = None
+
+        pr_head, is_synth, meta = detect_synthetic_merge_head(base_ref)
+        summary.update(meta)
+        summary["ci_pr_head"] = pr_head
+        if is_synth:
+            summary["ci_fallback_mode"] = "synthetic_merge_head^2"
+
+        try:
+            merge_base = run_git(["merge-base", base_ref, pr_head]).strip()
+            summary["ci_merge_base"] = merge_base
+        except Exception as e:
+            add_fail(summary, findings, "CI_MERGE_BASE_FAILED", f"Failed to compute merge-base for CI range: {e}")
+            summary["findings"] = [{"level": f.level, "code": f.code, "message": f.message, "path": f.path} for f in findings]
+            ok = summary["pass"] is True
+            return ok, findings, summary, active_pack, repo_root
+
+        try:
+            rev_out = run_git(["rev-list", "--reverse", f"{merge_base}..{pr_head}"])
+            commits = [c.strip() for c in rev_out.splitlines() if c.strip()]
+        except Exception as e:
+            add_fail(summary, findings, "CI_REV_LIST_FAILED", f"Failed to enumerate CI commits for replay: {e}")
+            summary["findings"] = [{"level": f.level, "code": f.code, "message": f.message, "path": f.path} for f in findings]
+            ok = summary["pass"] is True
+            return ok, findings, summary, active_pack, repo_root
+
+        summary["ci_commit_count"] = len(commits)
+        commit_results: List[Dict[str, Any]] = []
+
+        for commit in commits:
+            parent = git_first_parent(commit)
+            try:
+                dt = git_diff_tree_name_status(commit)
+                changed = parse_name_status_with_rename_expansion(dt)
+            except Exception as e:
+                changed = []
+                res = {
+                    "commit": commit,
+                    "parent": parent,
+                    "pass": False,
+                    "skipped": False,
+                    "active_intent_id": None,
+                    "active_pack_path": None,
+                    "changed_files": [],
+                    "ignored_changed_files": [],
+                    "findings": [{"level": "fail", "code": "CI_DIFF_TREE_FAILED", "message": str(e), "path": None}],
+                }
+                commit_results.append(res)
+                continue
+
+            res = validate_commit_snapshot(commit, parent, changed)
+            commit_results.append(res)
+
+        summary["ci_commits"] = commit_results
+
+        failing_commits = [c for c in commit_results if not c.get("pass") and not c.get("skipped")]
+        if failing_commits:
+            add_fail(
+                summary,
+                findings,
+                "CI_COMMIT_REPLAY_FAILED",
+                f"{len(failing_commits)} commit(s) failed validation in CI commit replay.",
+            )
+
+        summary["findings"] = [{"level": f.level, "code": f.code, "message": f.message, "path": f.path} for f in findings]
+        ok = summary["pass"] is True
+        return ok, findings, summary, active_pack, repo_root
+
+    # zones.yml (non-CI)
     try:
         zones = load_zones_config(repo_root, framework_root_rel)
     except Exception as e:
@@ -542,32 +1143,6 @@ def validate(stage: str) -> Tuple[bool, List[Finding], Dict[str, Any], Optional[
             "ZONES_SCHEMA_INVALID",
             "zones.yml must define non-empty string lists for zones.purple.paths and zones.orange.paths.",
         )
-        summary["findings"] = [{"level": f.level, "code": f.code, "message": f.message, "path": f.path} for f in findings]
-        return False, findings, summary, active_pack, repo_root
-
-    # current-intent.json
-    try:
-        current_intent = load_current_intent(repo_root, current_intent_file_rel)
-
-        required_ci_keys = ("schema_version", "active_intent_id", "active_pack_path")
-        missing_ci = [k for k in required_ci_keys if k not in current_intent]
-        if missing_ci:
-            raise ValueError(f"current-intent.json missing required keys: {', '.join(missing_ci)}")
-
-        summary["active_intent_id"] = current_intent.get("active_intent_id")
-        summary["active_pack_path"] = current_intent.get("active_pack_path")
-        intents_root_abs = (repo_root.resolve() / intents_root_rel).resolve()
-        active_pack = resolve_active_pack(intents_root_abs, current_intent)
-    except Exception as e:
-        debug(f"current intent resolve exception: {e!r}")
-        add_fail(summary, findings, "CURRENT_INTENT_SCHEMA_INVALID", f"Failed to load/validate current intent control file: {e}")
-        summary["findings"] = [{"level": f.level, "code": f.code, "message": f.message, "path": f.path} for f in findings]
-        return False, findings, summary, active_pack, repo_root
-
-    add_debug(summary, "active_pack_resolved", str(active_pack))
-
-    if active_pack is None or not active_pack.exists():
-        add_fail(summary, findings, "ACTIVE_PACK_MISSING", f"Active intent pack does not exist: {active_pack}")
         summary["findings"] = [{"level": f.level, "code": f.code, "message": f.message, "path": f.path} for f in findings]
         return False, findings, summary, active_pack, repo_root
 
