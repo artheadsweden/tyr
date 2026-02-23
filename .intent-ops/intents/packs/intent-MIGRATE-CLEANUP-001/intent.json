@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0",
+  "intent_id": "intent-MIGRATE-CLEANUP-001",
+  "status": "open",
+  "goal": "Remove legacy ID-SDLC artifacts and old id-sdlc agent files from the repo.",
+  "scope": {
+    "allowed_paths": [
+      ".intent-ops/**",
+      ".github/agents/**",
+      ".id-sdlc/**",
+      "ID-SDLC.md",
+      "IDD.md",
+      "README.md",
+      "update-plan.md",
+      "update_v05-v09.md",
+      "update-v05-v09.md"
+    ],
+    "forbidden_paths": [
+      ".intent-ops/framework/**"
+    ]
+  },
+  "operations": {
+    "allowed": [
+      "create_files",
+      "create_folders",
+      "edit_files"
+    ],
+    "forbidden": [
+      "refactor",
+      "formatting_only_changes",
+      "dependency_changes",
+      "runtime_behavior_changes"
+    ]
+  },
+  "acceptance_criteria": [
+    "All legacy paths listed in the goal are removed from git.",
+    "Validator passes coding, verification, and ci stages on this branch."
+  ]
+}
