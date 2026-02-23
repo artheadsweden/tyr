@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "intent_id": "intent-MIGRATE-CLEANUP-001",
-  "status": "open",
+  "status": "closed",
   "goal": "Remove legacy ID-SDLC artifacts and old id-sdlc agent files from the repo.",
   "scope": {
     "allowed_paths": [
