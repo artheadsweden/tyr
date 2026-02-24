@@ -42,37 +42,71 @@ Transaction discipline (non negotiable)
 - Kernel upgrades require an explicit kernel_upgrade allowlist and must be validated under verification or ci stage
 
 Human approval gate (mandatory before coding)
+
 Trigger
 - After Planner has produced evidence/plan.md (and prompt.md if present), stop and request human approval before invoking the Coding agent.
 
-Inputs to summarise (only)
-- Active pack intent.json
+Inputs (only)
+- .intent-ops/intents/current-intent.json
+- Active pack intent.json at: .intent-ops/intents/<active_pack_path>/intent.json
 - Active pack evidence/plan.md
 - Active pack prompt.md (if present)
 
-Plain language summary to present
-- Goal (1–2 lines)
-- Scope (allowed + forbidden, highlight deny wins)
-- Planned file changes (exact list from plan.md)
-- Operations allowed and forbidden (short)
-- Acceptance criteria (bullet list)
+Presentation format (must be readable; keep lines short)
+Compute:
+- pack_base = ".intent-ops/intents/" + <active_pack_path> + "/"
 
-Approval question
+Then present exactly this structure (fill in values dynamically):
+
+Human approval gate (required before coding)
+
+Goal
+<goal>
+
+Scope
+Allowed:
+<each allowed_paths entry on its own line>
+Forbidden (deny wins):
+<each forbidden_paths entry on its own line>
+
+Planned changes (from evidence/plan.md)
+Base:
+<pack_base>
+
+Already done (plan):
+- <paths relative to pack_base>
+
+If you approve (coding):
+- <paths relative to pack_base>
+
+Later (close):
+- intent.json (status open -> closed)
+
+Operations
+Allowed:   <list>
+Forbidden: <list>
+
+Acceptance criteria
+- <each criterion on its own line>
+
+Choose:
+GO = start coding now
+NO-GO = revise intent/plan
+CANCEL = stop
+
+Approval question (mandatory)
 Use #tool:vscode/askQuestions with exactly these options:
 - GO (start coding)
 - NO-GO (revise intent/plan)
 - CANCEL (stop)
 
 Actions
-- If GO:
-  - invoke IntentOps Coding via runSubagent
-- If NO-GO:
-  - decide whether scope/intent must change or only the plan:
-    - if intent.json needs changes -> invoke IntentOps Intent
-    - otherwise -> invoke IntentOps Planner
-  - re-read plan.md and re-run the human approval gate
-- If CANCEL:
-  - stop immediately, no further subagent calls
+- If GO: invoke IntentOps Coding via runSubagent.
+- If NO-GO: invoke Planner (or Intent agent if scope/intent must change), then re-present this gate.
+- If CANCEL: stop immediately.
+
+Safety rule
+- If plan.md contains any repo path outside pack_base, stop and treat it as NO-GO.
 
 Subagent invocation templates
 Use these exact tool calls (edit only the prompt text):
